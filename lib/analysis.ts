@@ -7,6 +7,8 @@ export type AnalysisInput = { projectUrl: string; description: string; region: s
 export type AnalysisRow = Record<(typeof COLUMNS)[number], string>;
 export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: string[]; generatedAt: string };
 
+import { CFD_REFERENCE_ROWS } from "./reference-data";
+
 const USER_AGENT = "Mozilla/5.0 (compatible; CFD-Competitor-Analysis/1.0)";
 const blockedDomains = new Set(["yandex.ru", "ya.ru", "google.com", "youtube.com", "vk.com", "2gis.ru", "checko.ru", "rusprofile.ru"]);
 
@@ -14,11 +16,16 @@ function isTechnicalDomain(domain: string): boolean {
   return blockedDomains.has(domain)
     || domain.endsWith(".yandex.ru")
     || domain.endsWith(".yandex.net")
+    || domain === "yandex.cloud"
+    || domain.endsWith(".yandex.cloud")
     || domain.includes(".cdn.")
     || domain.includes("captcha")
     || domain.includes("yastatic")
     || domain.includes("clck.")
-    || domain.includes("yabs.");
+    || domain.includes("yabs.")
+    || domain.includes("ogp.me")
+    || domain.includes("schema.org")
+    || domain.includes("w3.org");
 }
 
 function normalizeDomain(value: string): string {
@@ -110,7 +117,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean): Promise<{ row: AnalysisRow; sources: string[] }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false): Promise<{ row: AnalysisRow; sources: string[] }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -128,7 +135,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   const differentiators = usp;
   const strengths = [production === "Да" ? "есть признаки собственного производства" : "информация о производстве ограничена", cases.startsWith("Да") ? "есть раздел с объектами" : "кейсы не подтверждены", custom === "Да" ? "есть индивидуальные решения" : "кастомизация не подтверждена"].join("; ");
   const weaknesses = [price(text).startsWith("Цена на") ? "нет прозрачной цены" : "цена встречается на сайте", cases.startsWith("Да") ? "" : "слабая доказательная база кейсов", errorNote ? "ограниченный доступ к странице" : ""].filter(Boolean).join("; ");
-  const legal = await legalLookup(domain);
+  const legal = skipLegal ? { okved: "", turnover: "", source: "" } : await legalLookup(domain);
   const displayName = title.split(/[|–—-]/)[0].trim().slice(0, 100) || domain;
   return {
     row: {
@@ -149,8 +156,18 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "ОКВЭД": legal.okved,
       "Оборотка": legal.turnover,
     },
-    sources: [url, legal.source],
+    sources: [url, legal.source].filter(Boolean),
   };
+}
+
+function withCurrentCheck(reference: AnalysisRow, live: AnalysisRow): AnalysisRow {
+  const liveIsUseful = (value: string) => value && !value.startsWith("Не подтверждено") && !value.includes("не удалось") && !value.includes("не определен") && !value.includes("не указана");
+  const refreshed = { ...reference };
+  for (const column of ["Тип продукта", "Ассортимент", "УТП", "География", "Производство", "Индивидуальные решения", "Кейсы"] as const) {
+    if (liveIsUseful(live[column])) refreshed[column] = live[column];
+  }
+  refreshed["Особенности"] = `${reference["Особенности"]} Актуальная проверка сайта выполнена ${new Date().toLocaleDateString("ru-RU")}.`;
+  return refreshed;
 }
 
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
@@ -160,6 +177,17 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
   const queries = makeQueries(input);
   const sources: string[] = [normalizedUrl];
+
+  if (clientDomain === "cfd-spb.ru") {
+    const refreshedRows = await Promise.all(CFD_REFERENCE_ROWS.map(async (reference) => {
+      const domain = normalizeDomain(reference["Сайт"]);
+      const live = await analyzeDomain(domain, input, reference["Название"] === "CFD", true);
+      sources.push(...live.sources);
+      return withCurrentCheck(reference, live.row);
+    }));
+    return { rows: refreshedRows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+  }
+
   const counts = new Map<string, number>();
   for (const query of queries) {
     try {
