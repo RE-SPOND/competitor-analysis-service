@@ -166,7 +166,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
 function withCurrentCheck(reference: AnalysisRow, live: AnalysisRow): AnalysisRow {
   const liveIsUseful = (value: string) => value && !value.startsWith("Не подтверждено") && !value.includes("не удалось") && !value.includes("не определен") && !value.includes("не указана");
   const refreshed = { ...reference };
-  for (const column of ["Тип продукта", "Ассортимент", "УТП", "География", "Производство", "Индивидуальные решения", "Кейсы"] as const) {
+  for (const column of ["Тип продукта", "Ассортимент", "УТП", "География", "Производство", "Индивидуальные решения", "Кейсы", "ОКВЭД", "Оборотка"] as const) {
     if (liveIsUseful(live[column])) refreshed[column] = live[column];
   }
   refreshed["Особенности"] = `${reference["Особенности"]} Актуальная проверка сайта выполнена ${new Date().toLocaleDateString("ru-RU")}.`;
@@ -184,7 +184,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (clientDomain === "cfd-spb.ru") {
     const refreshedRows = await Promise.all(CFD_REFERENCE_ROWS.map(async (reference) => {
       const domain = normalizeDomain(reference["Сайт"]);
-      const live = await analyzeDomain(domain, input, reference["Название"] === "CFD", true);
+      const live = await analyzeDomain(domain, input, reference["Название"] === "CFD");
       sources.push(...live.sources);
       return withCurrentCheck(reference, live.row);
     }));
