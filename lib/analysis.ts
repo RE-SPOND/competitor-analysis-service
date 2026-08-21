@@ -10,6 +10,17 @@ export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: 
 const USER_AGENT = "Mozilla/5.0 (compatible; CFD-Competitor-Analysis/1.0)";
 const blockedDomains = new Set(["yandex.ru", "ya.ru", "google.com", "youtube.com", "vk.com", "2gis.ru", "checko.ru", "rusprofile.ru"]);
 
+function isTechnicalDomain(domain: string): boolean {
+  return blockedDomains.has(domain)
+    || domain.endsWith(".yandex.ru")
+    || domain.endsWith(".yandex.net")
+    || domain.includes(".cdn.")
+    || domain.includes("captcha")
+    || domain.includes("yastatic")
+    || domain.includes("clck.")
+    || domain.includes("yabs.");
+}
+
 function normalizeDomain(value: string): string {
   return value.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].split("?")[0];
 }
@@ -34,7 +45,7 @@ function domainsFromHtml(html: string): string[] {
   const result: string[] = [];
   for (const match of matches) {
     const domain = normalizeDomain(match[1]);
-    if (!domain || blockedDomains.has(domain) || domain.endsWith(".yandex.ru") || domain.includes("captcha") || domain.includes("search")) continue;
+    if (!domain || isTechnicalDomain(domain) || domain.includes("search")) continue;
     if (!result.includes(domain)) result.push(domain);
   }
   return result;
