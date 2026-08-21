@@ -21,19 +21,26 @@ export default function Home() {
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
 
-  async function loadSession() {
-    const response = await fetch("/api/session");
-    const data = await response.json();
-    setAuthenticated(Boolean(data.authenticated));
-    if (data.authenticated) loadHistory();
-  }
-
   async function loadHistory() {
     const response = await fetch("/api/history");
     if (response.ok) setHistory((await response.json()).items ?? []);
   }
 
-  useEffect(() => { loadSession(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const response = await fetch("/api/session");
+      const data = await response.json();
+      if (cancelled) return;
+      setAuthenticated(Boolean(data.authenticated));
+      if (data.authenticated) {
+        const historyResponse = await fetch("/api/history");
+        if (!cancelled && historyResponse.ok) setHistory((await historyResponse.json()).items ?? []);
+      }
+    }
+    void load();
+    return () => { cancelled = true; };
+  }, []);
 
   async function handleLogin(event: FormEvent) {
     event.preventDefault();

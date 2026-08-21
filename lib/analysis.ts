@@ -80,11 +80,6 @@ async function searchYandex(query: string): Promise<{ domains: string[]; source:
   return { domains: domainsFromHtml(html).slice(0, 10), source };
 }
 
-function firstSentence(text: string): string {
-  const part = text.split(/(?<=[.!?])\s+/).find((item) => item.length > 35);
-  return (part || text).slice(0, 240).trim();
-}
-
 function capitalizeSentences(row: AnalysisRow): AnalysisRow {
   const normalized = { ...row };
   for (const column of COLUMNS) {
@@ -104,7 +99,7 @@ function price(text: string): string {
 
 function contactChannels(html: string, text: string): string {
   const channels = ["Сайт"];
-  if (/tel:/i.test(html) || /\+?\d[\d\s()\-]{8,}/.test(text)) channels.push("телефон");
+  if (/tel:/i.test(html) || /\+?\d[\d\s()-]{8,}/.test(text)) channels.push("телефон");
   if (/mailto:/i.test(html) || /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(text)) channels.push("email");
   if (/whatsapp/i.test(html)) channels.push("WhatsApp");
   if (/telegram|t\.me/i.test(html)) channels.push("Telegram");
@@ -133,7 +128,6 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   let title = domain;
   let errorNote = "";
   try { html = await fetchText(url); text = pageText(html); title = titleFromHtml(html) || domain; } catch (error) { errorNote = ` Страница не открылась автоматически: ${error instanceof Error ? error.message : "ошибка сети"}.`; }
-  const lower = text.toLowerCase();
   const product = listFound(text, { "минеральн": "декор из минеральной ваты", "фасадн": "фасадный декор", "архитектур": "архитектурные элементы", "утепл": "утепление", "искусственн": "искусственный камень", "бетон": "архитектурный бетон", "пенополистирол": "декор из пенополистирола" }) || "Фасадный декор и архитектурные элементы (по описанию сайта).";
   const assortment = listFound(text, { "карниз": "карнизы", "наличник": "наличники", "колонн": "колонны", "пилястр": "пилястры", "балюстр": "балюстрады", "руст": "русты", "капител": "капители", "барельеф": "барельефы", "молдинг": "молдинги", "подокон": "подоконники" }) || "Ассортимент требует дополнительного просмотра каталога.";
   const usp = listFound(text, { "негорюч": "негорючесть", "класс к0": "класс К0", "собственн.*производ": "собственное производство", "под ключ": "решение под ключ", "чпу": "ЧПУ / точная обработка", "доставк": "доставка", "сертификат": "сертификаты" }) || "Явное УТП автоматически не выделено.";

@@ -1,5 +1,5 @@
 declare module "cloudflare:workers" {
-  export const env: any;
+  export const env: Record<string, unknown>;
 }
 
 type Fetcher = { fetch(request: Request): Promise<Response> };
