@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS analyses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_url TEXT NOT NULL,
+  description TEXT NOT NULL,
+  region TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
