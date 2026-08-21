@@ -85,6 +85,15 @@ function firstSentence(text: string): string {
   return (part || text).slice(0, 240).trim();
 }
 
+function capitalizeSentences(row: AnalysisRow): AnalysisRow {
+  const normalized = { ...row };
+  for (const column of COLUMNS) {
+    if (column === "Название" || column === "Сайт") continue;
+    normalized[column] = normalized[column].replace(/(^|[.!?]\s+)([a-zа-яё])/giu, (_match, prefix: string, letter: string) => `${prefix}${letter.toUpperCase()}`);
+  }
+  return normalized;
+}
+
 function findAny(text: string, words: string[]): boolean { const lower = text.toLowerCase(); return words.some((word) => lower.includes(word)); }
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
@@ -185,7 +194,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       sources.push(...live.sources);
       return withCurrentCheck(reference, live.row);
     }));
-    return { rows: refreshedRows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+    return { rows: refreshedRows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
   }
 
   const counts = new Map<string, number>();
@@ -200,7 +209,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (competitors.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const client = await analyzeDomain(clientDomain, input, true);
   const competitorResults = await Promise.all(competitors.map((domain) => analyzeDomain(domain, input, false)));
-  const rows = [client.row, ...competitorResults.map((result) => result.row)];
+  const rows = [client.row, ...competitorResults.map((result) => result.row)].map(capitalizeSentences);
   for (const result of [client, ...competitorResults]) sources.push(...result.sources);
   return { rows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
 }
