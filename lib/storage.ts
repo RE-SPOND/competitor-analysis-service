@@ -8,7 +8,6 @@ const memory: StoredAnalysis[] = [];
 let schemaReady: Promise<void> | null = null;
 
 async function database(): Promise<Database | null> {
-  if (typeof process !== "undefined" && process.release?.name === "node") return null;
   try {
     const runtime = await import("cloudflare:workers");
     return ((runtime.env as unknown as { DB?: Database }).DB) || null;
