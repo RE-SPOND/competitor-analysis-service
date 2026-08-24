@@ -207,61 +207,133 @@ function makeQueries(input: AnalysisInput, clientDomain: string, context: string
 
 type SearchResponse = { domains: string[]; source: string; html: string; evidence: Record<string, string>; mapLeads: string[] };
 
+const FALLBACK_SEARX_INSTANCES = [
+  "https://search.mectov.my.id/",
+  "https://searxng.gr/",
+  "https://search.mdosch.de/",
+  "https://etsi.me/",
+];
+let searxRegistryCache: { expiresAt: number; urls: string[] } | null = null;
+let searxRegistryRequest: Promise<string[]> | null = null;
+
+async function availableSearxInstances(): Promise<string[]> {
+  if (searxRegistryCache && searxRegistryCache.expiresAt > Date.now()) return searxRegistryCache.urls;
+  if (!searxRegistryRequest) {
+    searxRegistryRequest = (async () => {
+      let urls = [...FALLBACK_SEARX_INSTANCES];
+      try {
+        const registry = JSON.parse(await fetchText("https://searx.space/data/instances.json", 8000)) as {
+          instances?: Record<string, {
+            network_type?: string;
+            http?: { status_code?: number };
+            timing?: { search?: { success_percentage?: number; all?: { median?: number } } };
+          }>;
+        };
+        const healthy = Object.entries(registry.instances || {})
+          .filter(([url, details]) => url.startsWith("https://")
+            && details.network_type === "normal"
+            && details.http?.status_code === 200
+            && (details.timing?.search?.success_percentage || 0) >= 90)
+          .sort((a, b) => (a[1].timing?.search?.all?.median || 99) - (b[1].timing?.search?.all?.median || 99))
+          .map(([url]) => url.endsWith("/") ? url : `${url}/`);
+        urls = [...new Set([...FALLBACK_SEARX_INSTANCES, ...healthy])].slice(0, 16);
+      } catch { /* Static fallbacks keep the service working if the registry is unavailable. */ }
+      searxRegistryCache = { expiresAt: Date.now() + 30 * 60 * 1000, urls };
+      return urls;
+    })();
+  }
+  try { return await searxRegistryRequest; }
+  finally { searxRegistryRequest = null; }
+}
+
+function stableHash(value: string): number {
+  let hash = 0;
+  for (const character of value) hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+  return hash;
+}
+
 function mapLeadName(title: string): string {
   return title.replace(/\s+(?:в|на)\s+(?:2ГИС|Яндекс Картах?).*$/iu, "")
     .replace(/\s*[|–—-]\s*(?:2ГИС|Яндекс Карты?).*$/iu, "")
     .split(",")[0].trim().slice(0, 80);
 }
 
-async function searchWeb(query: string, page = 0): Promise<SearchResponse> {
-  const providerPage = page;
-  const offset = providerPage * 30;
-  const bingFirst = providerPage * 10 + 1;
-  const encoded = encodeURIComponent(query);
-  const searxInstances = ["https://search.mdosch.de/", "https://etsi.me/"];
-  const rotatedSearx = [...searxInstances.slice(page % searxInstances.length), ...searxInstances.slice(0, page % searxInstances.length)];
-  for (const baseUrl of rotatedSearx) {
-    const source = `${baseUrl}search?q=${encoded}&format=json&language=ru&pageno=${page + 1}`;
-    try {
-      const payload = JSON.parse(await fetchText(source, 6000)) as { results?: Array<{ url?: string; title?: string; content?: string }> };
-      const evidence: Record<string, string> = {};
-      const mapLeads: string[] = [];
-      for (const result of payload.results || []) {
-        if (!result.url) continue;
-        let rawDomain = "";
-        try { rawDomain = normalizeDomain(new URL(result.url).hostname); } catch { continue; }
-        if (rawDomain === "2gis.ru" || rawDomain.endsWith(".2gis.ru") || (rawDomain.endsWith("yandex.ru") && result.url.includes("/maps"))) {
-          const lead = mapLeadName(result.title || "");
-          if (lead.length >= 2 && !/^(2гис|яндекс карты|поиск|карта)$/iu.test(lead) && !mapLeads.includes(lead)) mapLeads.push(lead);
-          continue;
-        }
-        const domain = domainsFromUrls([result.url])[0];
-        if (!domain) continue;
-        evidence[domain] = `${evidence[domain] || ""} ${result.title || ""} ${result.content || ""}`.trim();
-      }
-      const domains = Object.keys(evidence);
-      if (domains.length > 0 || mapLeads.length > 0) return { domains, source, html: JSON.stringify(payload), evidence, mapLeads };
-    } catch { /* Continue with another metasearch instance or a direct provider. */ }
+async function searchSearx(baseUrl: string, query: string, page: number): Promise<SearchResponse> {
+  const source = `${baseUrl}search?q=${encodeURIComponent(query)}&format=json&language=ru&pageno=${page + 1}`;
+  const payload = JSON.parse(await fetchText(source, 7000)) as { results?: Array<{ url?: string; title?: string; content?: string }> };
+  const evidence: Record<string, string> = {};
+  const mapLeads: string[] = [];
+  for (const result of payload.results || []) {
+    if (!result.url) continue;
+    let rawDomain = "";
+    try { rawDomain = normalizeDomain(new URL(result.url).hostname); } catch { continue; }
+    if (rawDomain === "2gis.ru" || rawDomain.endsWith(".2gis.ru") || (rawDomain.endsWith("yandex.ru") && result.url.includes("/maps"))) {
+      const lead = mapLeadName(result.title || "");
+      if (lead.length >= 2 && !/^(2гис|яндекс карты|поиск|карта)$/iu.test(lead) && !mapLeads.includes(lead)) mapLeads.push(lead);
+      continue;
+    }
+    const domain = domainsFromUrls([result.url])[0];
+    if (!domain) continue;
+    evidence[domain] = `${evidence[domain] || ""} ${result.title || ""} ${result.content || ""}`.trim();
   }
-  const providerSources = [
+  const domains = Object.keys(evidence);
+  if (domains.length === 0 && mapLeads.length === 0) throw new Error("Поисковая выдача не содержит сайтов.");
+  return { domains, source, html: JSON.stringify(payload), evidence, mapLeads };
+}
+
+function directProviderSources(query: string, page: number): string[][] {
+  const encoded = encodeURIComponent(query);
+  const offset = page * 30;
+  const bingFirst = page * 10 + 1;
+  return [
     [`https://html.duckduckgo.com/html/?q=${encoded}&s=${offset}`, `https://lite.duckduckgo.com/lite/?q=${encoded}&s=${offset}`],
-    [`https://r.jina.ai/http://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`, `https://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`],
-    [`https://r.jina.ai/http://search.brave.com/search?q=${encoded}&source=web&offset=${providerPage}`, `https://search.brave.com/search?q=${encoded}&source=web&offset=${providerPage}`],
+    [`https://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`, `https://r.jina.ai/http://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`],
+    [`https://search.brave.com/search?q=${encoded}&source=web&offset=${page}`, `https://r.jina.ai/http://search.brave.com/search?q=${encoded}&source=web&offset=${page}`],
     [`https://www.google.com/search?q=${encoded}&start=${offset}`, `https://r.jina.ai/http://www.google.com/search?q=${encoded}&start=${offset}`],
-    [`https://yandex.ru/search/?text=${encoded}&p=${providerPage}`, `https://r.jina.ai/http://yandex.ru/search/?text=${encoded}&p=${providerPage}`],
+    [`https://yandex.ru/search/?text=${encoded}&p=${page}`, `https://r.jina.ai/http://yandex.ru/search/?text=${encoded}&p=${page}`],
   ];
-  const preferredProvider = page % providerSources.length;
-  const sources = providerSources[preferredProvider];
+}
+
+async function searchDirectSources(sources: string[]): Promise<SearchResponse> {
   let lastError: unknown;
   for (const source of sources) {
     try {
-      const html = await fetchText(source, 6000);
+      const html = await fetchText(source, 7000);
       const domains = domainsFromSearchHtml(html);
       if (domains.length > 0) return { domains, source, html, evidence: {}, mapLeads: [] };
       lastError = new Error("Поисковая выдача не содержит сайтов.");
     } catch (error) { lastError = error; }
   }
   throw lastError instanceof Error ? lastError : new Error("Открытые поисковые источники недоступны.");
+}
+
+async function searchWeb(query: string, page = 0): Promise<SearchResponse> {
+  let lastError: unknown;
+  if (page < 2) {
+    try {
+      const instances = await availableSearxInstances();
+      const selected = instances[stableHash(`${query}:${page}`) % Math.min(2, instances.length)];
+      return await searchSearx(selected, query, page);
+    } catch (error) { lastError = error; }
+  }
+  const providerGroups = directProviderSources(query, page);
+  try { return await searchDirectSources(providerGroups[page % providerGroups.length]); }
+  catch (error) { lastError = error; }
+  throw lastError instanceof Error ? lastError : new Error("Открытые поисковые источники недоступны.");
+}
+
+async function searchWebRescue(query: string): Promise<SearchResponse> {
+  let lastError: unknown;
+  const instances = await availableSearxInstances();
+  for (const instance of instances.slice(0, 12)) {
+    try { return await searchSearx(instance, query, 0); }
+    catch (error) { lastError = error; }
+  }
+  for (const sources of directProviderSources(query, 0)) {
+    try { return await searchDirectSources(sources); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Все поисковые источники временно недоступны.");
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
@@ -373,13 +445,12 @@ function contactChannels(html: string, text: string): string {
 }
 
 async function legalLookup(domain: string): Promise<{ okved: string; turnover: string; source: string }> {
-  const query = `${domain} ИНН ОКВЭД выручка`;
+  const source = `https://checko.ru/search?query=${encodeURIComponent(domain)}`;
   try {
-    const result = await searchWeb(query);
-    const text = pageText(result.html);
+    const text = pageText(await fetchText(source, 7000));
     const okved = text.match(/ОКВЭД[^\d]{0,28}(\d{2}\.\d{1,2}(?:\.\d{1,2})?)/i)?.[1];
     const turnover = text.match(/выручк[а-я]*[^\d]{0,28}([\d\s,.]+(?:млн|млрд)?\s*(?:₽|руб(?:лей)?))/i)?.[1];
-    return { okved: okved || "Не подтверждено: требуется проверка юрданных.", turnover: turnover || "Не подтверждено: выручка не найдена в открытой выдаче.", source: result.source };
+    return { okved: okved || "Не подтверждено: требуется проверка юрданных.", turnover: turnover || "Не подтверждено: выручка не найдена в открытой выдаче.", source };
   } catch {
     return { okved: "Не подтверждено: требуется проверка юрданных.", turnover: "Не подтверждено: выручка не найдена в открытой выдаче.", source: "" };
   }
@@ -493,6 +564,23 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       }
     }
   }
+  if (counts.size === 0) {
+    const rescueQueries = [...new Set([queries[0], queries[1], `${basePhrase} конкуренты аналоги ${input.region}`])].filter(Boolean);
+    for (const query of rescueQueries) {
+      try {
+        const result = await searchWebRescue(query);
+        sources.push(result.source);
+        result.mapLeads.forEach((lead) => mapLeads.add(lead));
+        for (const domain of result.domains) {
+          if (domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+          counts.set(domain, (counts.get(domain) || 0) + 1);
+          const evidence = result.evidence[domain];
+          if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
+        }
+        if (counts.size > 0) break;
+      } catch { /* Try the next broad rescue query before returning an error. */ }
+    }
+  }
   if (mapLeads.size > 0) {
     const leadSearches = await mapWithConcurrency([...mapLeads], 2, (lead) => searchWeb(`${lead} ${basePhrase} официальный сайт ${input.region}`, 0));
     for (const settled of leadSearches) {
@@ -559,7 +647,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   }
 
-  await mapWithConcurrency(competitors, 10, async (competitor) => {
+  await mapWithConcurrency(competitors, 4, async (competitor) => {
     const legal = await legalLookup(competitor.domain);
     competitor.row["ОКВЭД"] = legal.okved;
     competitor.row["Оборотка"] = legal.turnover;

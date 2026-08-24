@@ -32,6 +32,9 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(analysis, /search\.brave\.com/);
   assert.match(analysis, /html\.duckduckgo\.com/);
   assert.match(analysis, /www\.bing\.com/);
+  assert.match(analysis, /searx\.space\/data\/instances\.json/);
+  assert.match(analysis, /searchWebRescue/);
+  assert.match(analysis, /checko\.ru\/search\?query=/);
   assert.doesNotMatch(analysis, /clientDomain === "cfd-spb\.ru"/);
   assert.match(xlsx, /sheet name="Анализ"/);
   assert.match(xlsx, /autoFilter ref="A1:P/);
