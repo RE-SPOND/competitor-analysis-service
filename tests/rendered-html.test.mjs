@@ -15,7 +15,7 @@ async function render() {
   );
 }
 
-test("server-renders the CFD analysis login screen", async () => {
+test("server-renders the competitor analysis login screen", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -26,14 +26,13 @@ test("server-renders the CFD analysis login screen", async () => {
   assert.match(html, /name="description" content="Автоматизированный конкурентный анализ/);
 });
 
-test("keeps the agreed CFD competitor list and final Excel columns", async () => {
-  const reference = await readFile(new URL("lib/reference-data.ts", projectRoot), "utf8");
+test("uses open web search and keeps the final Excel columns", async () => {
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
   const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
-  for (const name of ["CFD", "Ваш Фасад", "Dekor-RP / РОКПАЙП", "Главный Фасад", "TTK Система"]) {
-    assert.match(reference, new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  }
-  assert.match(analysis, /clientDomain === "cfd-spb\.ru"/);
+  assert.match(analysis, /search\.brave\.com/);
+  assert.match(analysis, /html\.duckduckgo\.com/);
+  assert.match(analysis, /www\.bing\.com/);
+  assert.doesNotMatch(analysis, /clientDomain === "cfd-spb\.ru"/);
   assert.match(xlsx, /sheet name="Анализ"/);
   assert.match(xlsx, /autoFilter ref="A1:P/);
 });

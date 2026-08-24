@@ -7,13 +7,18 @@ export type AnalysisInput = { projectUrl: string; description: string; region: s
 export type AnalysisRow = Record<(typeof COLUMNS)[number], string>;
 export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: string[]; generatedAt: string };
 
-import { CFD_REFERENCE_ROWS } from "./reference-data";
-
-const USER_AGENT = "Mozilla/5.0 (compatible; CFD-Competitor-Analysis/1.0)";
-const blockedDomains = new Set(["yandex.ru", "ya.ru", "google.com", "youtube.com", "vk.com", "2gis.ru", "checko.ru", "rusprofile.ru"]);
+const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
+const blockedDomains = new Set([
+  "yandex.ru", "ya.ru", "google.com", "bing.com", "duckduckgo.com", "brave.com", "microsoft.com", "apple.com",
+  "youtube.com", "vk.com", "ok.ru", "dzen.ru", "rutube.ru", "t.me",
+  "2gis.ru", "checko.ru", "rusprofile.ru", "vc.ru", "t-j.ru", "wikipedia.org",
+  "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru",
+  "rbc.ru", "rb.ru", "forbes.ru", "ria.ru", "smi2.ru", "sostav.ru", "cossa.ru", "adindex.ru",
+  "irecommend.ru", "otzovik.com",
+]);
 
 function isTechnicalDomain(domain: string): boolean {
-  return blockedDomains.has(domain)
+  return [...blockedDomains].some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`))
     || domain.endsWith(".yandex.ru")
     || domain.endsWith(".yandex.net")
     || domain === "yandex.cloud"
@@ -41,43 +46,88 @@ function titleFromHtml(html: string): string {
   return match ? pageText(match[1]).slice(0, 180) : "";
 }
 
+function siteNameFromHtml(html: string): string {
+  const match = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:site_name["']/i);
+  return match ? pageText(match[1]).slice(0, 100) : "";
+}
+
+function metaDescriptionFromHtml(html: string): string {
+  const match = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i)
+    || html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+  return match ? pageText(match[1]).slice(0, 320) : "";
+}
+
+function firstUsefulSentence(value: string, fallback = ""): string {
+  const sentence = value.split(/(?<=[.!?])\s+|\r?\n/).map((item) => item.trim()).find((item) => item.length >= 30);
+  return (sentence || value.trim() || fallback).slice(0, 280);
+}
+
+function brandNameFromDomain(domain: string): string {
+  const label = normalizeDomain(domain).split(".")[0].replace(/[-_]+/g, " ");
+  return label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : domain;
+}
+
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept-Language": "ru-RU,ru;q=0.9" }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.text();
 }
 
-function domainsFromHtml(html: string): string[] {
-  const matches = html.matchAll(/https?:\/\/([^"'\\\s<>/?#]+)/gi);
+function domainsFromUrls(urls: string[]): string[] {
   const result: string[] = [];
-  for (const match of matches) {
-    const domain = normalizeDomain(match[1]);
+  for (const candidate of urls) {
+    let domain = "";
+    try { domain = normalizeDomain(new URL(candidate).hostname); } catch { continue; }
     if (!domain || isTechnicalDomain(domain) || domain.includes("search")) continue;
     if (!result.includes(domain)) result.push(domain);
   }
   return result;
 }
 
-function makeQueries(input: AnalysisInput): string[] {
-  const region = input.region.trim();
-  const base = input.description.trim();
-  const standard = [
-    `${base} ${region}`,
-    `купить ${base} ${region}`,
-    `производитель ${base}`,
-    `фасадный декор из минеральной ваты ${region}`,
-    `декоративные фасадные изделия из минеральной ваты`,
-    `архитектурный декор из минваты ${region}`,
-    `негорючий фасадный декор ${region}`,
-    `конкуренты ${base}`,
-  ];
-  return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 8);
+function domainsFromSearchHtml(html: string): string[] {
+  const urls: string[] = [];
+  for (const match of html.matchAll(/uddg=([^"&]+)/gi)) {
+    try { urls.push(decodeURIComponent(match[1].replace(/&amp;/g, "&"))); } catch { /* Ignore malformed redirect links. */ }
+  }
+  for (const match of html.matchAll(/<li[^>]+class=["'][^"']*b_algo[^"']*["'][\s\S]*?<a[^>]+href=["']([^"']+)["']/gi)) urls.push(match[1]);
+  for (const match of html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']+)["']/gi)) urls.push(match[1].replace(/&amp;/g, "&"));
+  return domainsFromUrls(urls);
 }
 
-async function searchYandex(query: string): Promise<{ domains: string[]; source: string }> {
-  const source = `https://yandex.ru/search/?text=${encodeURIComponent(query)}`;
-  const html = await fetchText(source);
-  return { domains: domainsFromHtml(html).slice(0, 10), source };
+function makeQueries(input: AnalysisInput): string[] {
+  const region = input.region.trim();
+  const base = firstUsefulSentence(input.description).replace(/\s+/g, " ").slice(0, 180);
+  const standard = [
+    `${base} ${region}`,
+    `${base} аналоги`,
+    `${base} конкуренты`,
+    `лучшие сервисы и компании ${base}`,
+    `заказать ${base} ${region}`,
+    `${base} цены`,
+  ];
+  return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 6);
+}
+
+type SearchResponse = { domains: string[]; source: string; html: string };
+
+async function searchWeb(query: string): Promise<SearchResponse> {
+  const sources = [
+    `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
+  ];
+  let lastError: unknown;
+  for (const source of sources) {
+    try {
+      const html = await fetchText(source);
+      const domains = domainsFromSearchHtml(html);
+      if (domains.length > 0) return { domains: domains.slice(0, 10), source, html };
+      lastError = new Error("Поисковая выдача не содержит сайтов.");
+    } catch (error) { lastError = error; }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Открытые поисковые источники недоступны.");
 }
 
 function capitalizeSentences(row: AnalysisRow): AnalysisRow {
@@ -110,14 +160,14 @@ function contactChannels(html: string, text: string): string {
 
 async function legalLookup(domain: string): Promise<{ okved: string; turnover: string; source: string }> {
   const query = `${domain} ИНН ОКВЭД выручка`;
-  const source = `https://yandex.ru/search/?text=${encodeURIComponent(query)}`;
   try {
-    const text = pageText(await fetchText(source));
+    const result = await searchWeb(query);
+    const text = pageText(result.html);
     const okved = text.match(/ОКВЭД[^\d]{0,28}(\d{2}\.\d{1,2}(?:\.\d{1,2})?)/i)?.[1];
     const turnover = text.match(/выручк[а-я]*[^\d]{0,28}([\d\s,.]+(?:млн|млрд)?\s*(?:₽|руб(?:лей)?))/i)?.[1];
-    return { okved: okved || "Не подтверждено: требуется проверка юрданных.", turnover: turnover || "Не подтверждено: выручка не найдена в открытой выдаче.", source };
+    return { okved: okved || "Не подтверждено: требуется проверка юрданных.", turnover: turnover || "Не подтверждено: выручка не найдена в открытой выдаче.", source: result.source };
   } catch {
-    return { okved: "Не подтверждено: требуется проверка юрданных.", turnover: "Не подтверждено: выручка не найдена в открытой выдаче.", source };
+    return { okved: "Не подтверждено: требуется проверка юрданных.", turnover: "Не подтверждено: выручка не найдена в открытой выдаче.", source: "" };
   }
 }
 
@@ -126,51 +176,60 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   let html = "";
   let text = "";
   let title = domain;
+  let siteName = "";
   let errorNote = "";
-  try { html = await fetchText(url); text = pageText(html); title = titleFromHtml(html) || domain; } catch (error) { errorNote = ` Страница не открылась автоматически: ${error instanceof Error ? error.message : "ошибка сети"}.`; }
-  const product = listFound(text, { "минеральн": "декор из минеральной ваты", "фасадн": "фасадный декор", "архитектур": "архитектурные элементы", "утепл": "утепление", "искусственн": "искусственный камень", "бетон": "архитектурный бетон", "пенополистирол": "декор из пенополистирола" }) || "Фасадный декор и архитектурные элементы (по описанию сайта).";
-  const assortment = listFound(text, { "карниз": "карнизы", "наличник": "наличники", "колонн": "колонны", "пилястр": "пилястры", "балюстр": "балюстрады", "руст": "русты", "капител": "капители", "барельеф": "барельефы", "молдинг": "молдинги", "подокон": "подоконники" }) || "Ассортимент требует дополнительного просмотра каталога.";
-  const usp = listFound(text, { "негорюч": "негорючесть", "класс к0": "класс К0", "собственн.*производ": "собственное производство", "под ключ": "решение под ключ", "чпу": "ЧПУ / точная обработка", "доставк": "доставка", "сертификат": "сертификаты" }) || "Явное УТП автоматически не выделено.";
-  const geography = listFound(text, { "моск": "Москва", "санкт-петербург": "Санкт-Петербург", "ленинград": "Ленинградская область", "нижн.*новгород": "Нижний Новгород", "по россии": "работа по РФ", "по всей россии": "работа по РФ" }) || input.region;
-  const production = findAny(text, ["собственное производство", "производим", "изготавливаем", "производство"]) ? "Да" : "Не подтверждено на главной странице";
-  const custom = findAny(text, ["индивидуальн", "по проекту", "нестандарт", "под заказ", "эскиз"]) ? "Да" : "Не указано";
-  const cases = findAny(text, ["портфолио", "наши объекты", "реализованные объекты", "кейсы", "проекты"]) ? "Да, найден раздел или упоминание объектов" : "Не найдено на доступной странице";
-  const differentiators = usp;
-  const strengths = [production === "Да" ? "есть признаки собственного производства" : "информация о производстве ограничена", cases.startsWith("Да") ? "есть раздел с объектами" : "кейсы не подтверждены", custom === "Да" ? "есть индивидуальные решения" : "кастомизация не подтверждена"].join("; ");
-  const weaknesses = [price(text).startsWith("Цена на") ? "нет прозрачной цены" : "цена встречается на сайте", cases.startsWith("Да") ? "" : "слабая доказательная база кейсов", errorNote ? "ограниченный доступ к странице" : ""].filter(Boolean).join("; ");
+  try { html = await fetchText(url); text = pageText(html); siteName = siteNameFromHtml(html); title = titleFromHtml(html) || domain; } catch (error) { errorNote = ` Страница не открылась автоматически: ${error instanceof Error ? error.message : "ошибка сети"}.`; }
+  const metaDescription = metaDescriptionFromHtml(html);
+  const inputProduct = firstUsefulSentence(input.description, "Описание продукта не указано.");
+  const siteProduct = firstUsefulSentence(metaDescription, title);
+  const product = isClient ? inputProduct : siteProduct;
+  const assortment = listFound(text, {
+    "консультац": "консультации", "подписк": "подписка", "отчет": "отчеты", "курс": "курсы", "вебинар": "вебинары",
+    "тест": "тесты", "дневник": "дневник", "чат": "чат", "приложен": "приложение", "психолог": "работа с психологом",
+    "карниз": "карнизы", "наличник": "наличники", "колонн": "колонны", "пилястр": "пилястры", "балюстр": "балюстрады",
+    "доставк": "доставка", "монтаж": "монтаж", "проектирован": "проектирование",
+  }) || `Основное предложение: ${siteProduct}`;
+  const usp = listFound(text, {
+    "бесплатн": "бесплатный доступ или материалы", "пробн": "пробный период", "24/7": "доступ 24/7",
+    "персональн": "персонализация", "индивидуальн": "индивидуальный подход", "конфиденц": "конфиденциальность",
+    "доказательн": "доказательный подход", "лиценз": "лицензии", "сертификат": "сертификаты",
+    "собственн": "собственная разработка или производство", "под ключ": "решение под ключ", "гарант": "гарантия",
+  }) || "Явное УТП автоматически не выделено.";
+  const geography = listFound(text, { "моск": "Москва", "санкт-петербург": "Санкт-Петербург", "ленинград": "Ленинградская область", "нижн.*новгород": "Нижний Новгород", "по россии": "работа по РФ", "по всей россии": "работа по РФ", "онлайн": "онлайн / без географических ограничений" }) || input.region;
+  const isDigitalService = findAny(`${input.description} ${text}`, ["онлайн", "сервис", "платформ", "приложен", "подписк", "консультац"]);
+  const production = isDigitalService ? "Не применимо: цифровой сервис или услуга" : findAny(text, ["собственное производство", "производим", "изготавливаем", "производство"]) ? "Да" : "Не подтверждено на доступной странице";
+  const custom = findAny(text, ["индивидуальн", "персональн", "по проекту", "подбор", "нестандарт", "под заказ", "эскиз"]) ? "Да" : "Не указано";
+  const cases = findAny(text, ["портфолио", "наши объекты", "реализованные объекты", "кейсы", "истории клиентов", "отзывы", "проекты"]) ? "Да, найдены кейсы, отзывы или упоминания результатов" : "Не найдено на доступной странице";
+  const currentPrice = price(text);
+  const channels = contactChannels(html, text);
+  const strengths = [usp.startsWith("Явное") ? "" : `выделены преимущества: ${usp}`, cases.startsWith("Да") ? "есть подтверждение результатами или отзывами" : "", channels.split(",").length > 2 ? "несколько каналов связи" : ""].filter(Boolean).join("; ") || "Сильные стороны требуют дополнительной экспертной оценки.";
+  const weaknesses = [currentPrice.startsWith("Цена на") ? "нет прозрачной цены" : "", cases.startsWith("Да") ? "" : "не найдены подробные кейсы или отзывы", errorNote ? "ограниченный автоматический доступ к сайту" : ""].filter(Boolean).join("; ");
   const legal = skipLegal ? { okved: "", turnover: "", source: "" } : await legalLookup(domain);
-  const displayName = title.split(/[|–—-]/)[0].trim().slice(0, 100) || domain;
+  const titleName = title.split(/[|–—-]/)[0].trim();
+  const titleIsGeneric = titleName === domain || titleName.length > 60 || /^(главная|официальный сайт|психологи онлайн|поиск|приём|каталог)$/i.test(titleName);
+  const siteNameIsGeneric = siteName.length > 18 && /психолог|консультац|онлайн/i.test(siteName);
+  const displayName = ((siteName && !siteNameIsGeneric ? siteName : "") || (titleIsGeneric ? brandNameFromDomain(domain) : titleName) || brandNameFromDomain(domain)).slice(0, 100);
   return {
     row: {
       "Название": isClient ? `${displayName} (клиент)` : displayName,
       "Сайт": domain,
       "Тип продукта": product,
       "Ассортимент": assortment,
-      "УТП": differentiators,
-      "Ценовой сегмент": price(text),
+      "УТП": usp,
+      "Ценовой сегмент": currentPrice,
       "География": geography,
       "Производство": production,
       "Индивидуальные решения": custom,
-      "Каналы": contactChannels(html, text),
+      "Каналы": channels,
       "Кейсы": cases,
       "Сильные стороны": strengths,
       "Слабые стороны": weaknesses || "Не удалось автоматически выделить.",
-      "Особенности": isClient ? "Клиент / эталон для сравнения." : `Собрано по доступной странице сайта.${errorNote}`,
+      "Особенности": isClient ? `Клиент / эталон для сравнения. ${inputProduct}` : `${siteProduct}.${errorNote}`,
       "ОКВЭД": legal.okved,
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
   };
-}
-
-function withCurrentCheck(reference: AnalysisRow, live: AnalysisRow): AnalysisRow {
-  const liveIsUseful = (value: string) => value && !value.startsWith("Не подтверждено") && !value.includes("не удалось") && !value.includes("не определен") && !value.includes("не указана");
-  const refreshed = { ...reference };
-  for (const column of ["Тип продукта", "Ассортимент", "УТП", "География", "Производство", "Индивидуальные решения", "Кейсы", "ОКВЭД", "Оборотка"] as const) {
-    if (liveIsUseful(live[column])) refreshed[column] = live[column];
-  }
-  refreshed["Особенности"] = `${reference["Особенности"]} Актуальная проверка сайта выполнена ${new Date().toLocaleDateString("ru-RU")}.`;
-  return refreshed;
 }
 
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
@@ -181,20 +240,10 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const queries = makeQueries(input);
   const sources: string[] = [normalizedUrl];
 
-  if (clientDomain === "cfd-spb.ru") {
-    const refreshedRows = await Promise.all(CFD_REFERENCE_ROWS.map(async (reference) => {
-      const domain = normalizeDomain(reference["Сайт"]);
-      const live = await analyzeDomain(domain, input, reference["Название"] === "CFD");
-      sources.push(...live.sources);
-      return withCurrentCheck(reference, live.row);
-    }));
-    return { rows: refreshedRows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
-  }
-
   const counts = new Map<string, number>();
   for (const query of queries) {
     try {
-      const result = await searchYandex(query);
+      const result = await searchWeb(query);
       sources.push(result.source);
       for (const domain of result.domains) { if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`)) counts.set(domain, (counts.get(domain) || 0) + 1); }
     } catch { /* A blocked search query does not invalidate successful queries. */ }
