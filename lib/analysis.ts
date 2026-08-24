@@ -96,6 +96,9 @@ function domainsFromSearchHtml(html: string): string[] {
   for (const match of html.matchAll(/uddg=([^"&]+)/gi)) {
     try { urls.push(decodeURIComponent(match[1].replace(/&amp;/g, "&"))); } catch { /* Ignore malformed redirect links. */ }
   }
+  for (const match of html.matchAll(/href=["']\/url\?q=([^"'&]+)/gi)) {
+    try { urls.push(decodeURIComponent(match[1].replace(/&amp;/g, "&"))); } catch { /* Ignore malformed Google redirect links. */ }
+  }
   for (const match of html.matchAll(/<li[^>]+class=["'][^"']*b_algo[^"']*["'][\s\S]*?<a[^>]+href=["']([^"']+)["']/gi)) urls.push(match[1]);
   for (const match of html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']+)["']/gi)) urls.push(match[1].replace(/&amp;/g, "&"));
   return domainsFromUrls(urls);
@@ -182,40 +185,114 @@ async function projectSearchContext(input: AnalysisInput, clientDomain: string):
 function makeQueries(input: AnalysisInput, clientDomain: string, context: string, brandStems: Set<string>): string[] {
   const region = input.region.trim();
   const base = compactSearchPhrase(context, brandStems);
+  const categoryBase = base.split(" ").slice(0, 2).join(" ");
+  const industryWord = base.split(" ")[0] || categoryBase;
   const brand = brandNameFromDomain(clientDomain);
   const audience = audiencePhrase(context);
+  const isPhysicalProduct = /производ|издел|материал|оборудован|товар|магазин|доставк|монтаж|купить/i.test(context);
   const standard = [
     `${base} ${region}`,
     `${base} компании ${region}`,
-    `${base} аналоги конкуренты`,
     `${base} цены стоимость ${region}`,
     `${brand} конкуренты аналоги`,
-    audience ? `${base} ${audience} ${region}` : `${base} предложения ${region}`,
+    audience ? `${categoryBase} ${audience} ${region}` : `${categoryBase} предложения ${region}`,
+    isPhysicalProduct ? `${base} производители поставщики купить заказать ${region}` : `${base} сервисы услуги платформы ${region}`,
+    `${categoryBase} конкуренты список игроков ${region}`,
+    `${industryWord} компании услуги сервисы производители ${region}`,
+    `${categoryBase} адреса регионы Яндекс Карты 2ГИС ${region}`,
+    `${categoryBase} кейсы проекты отзывы фото YouTube VK Telegram ${region}`,
   ];
-  return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 6);
+  return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))];
 }
 
-type SearchResponse = { domains: string[]; source: string; html: string };
+type SearchResponse = { domains: string[]; source: string; html: string; evidence: Record<string, string>; mapLeads: string[] };
 
-async function searchWeb(query: string): Promise<SearchResponse> {
-  const sources = [
-    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
-    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
-    `https://r.jina.ai/http://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
-    `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
-    `https://r.jina.ai/http://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
-    `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
+function mapLeadName(title: string): string {
+  return title.replace(/\s+(?:в|на)\s+(?:2ГИС|Яндекс Картах?).*$/iu, "")
+    .replace(/\s*[|–—-]\s*(?:2ГИС|Яндекс Карты?).*$/iu, "")
+    .split(",")[0].trim().slice(0, 80);
+}
+
+async function searchWeb(query: string, page = 0): Promise<SearchResponse> {
+  const providerPage = page;
+  const offset = providerPage * 30;
+  const bingFirst = providerPage * 10 + 1;
+  const encoded = encodeURIComponent(query);
+  const searxInstances = ["https://search.mdosch.de/", "https://etsi.me/"];
+  const rotatedSearx = [...searxInstances.slice(page % searxInstances.length), ...searxInstances.slice(0, page % searxInstances.length)];
+  for (const baseUrl of rotatedSearx) {
+    const source = `${baseUrl}search?q=${encoded}&format=json&language=ru&pageno=${page + 1}`;
+    try {
+      const payload = JSON.parse(await fetchText(source, 6000)) as { results?: Array<{ url?: string; title?: string; content?: string }> };
+      const evidence: Record<string, string> = {};
+      const mapLeads: string[] = [];
+      for (const result of payload.results || []) {
+        if (!result.url) continue;
+        let rawDomain = "";
+        try { rawDomain = normalizeDomain(new URL(result.url).hostname); } catch { continue; }
+        if (rawDomain === "2gis.ru" || rawDomain.endsWith(".2gis.ru") || (rawDomain.endsWith("yandex.ru") && result.url.includes("/maps"))) {
+          const lead = mapLeadName(result.title || "");
+          if (lead.length >= 2 && !/^(2гис|яндекс карты|поиск|карта)$/iu.test(lead) && !mapLeads.includes(lead)) mapLeads.push(lead);
+          continue;
+        }
+        const domain = domainsFromUrls([result.url])[0];
+        if (!domain) continue;
+        evidence[domain] = `${evidence[domain] || ""} ${result.title || ""} ${result.content || ""}`.trim();
+      }
+      const domains = Object.keys(evidence);
+      if (domains.length > 0 || mapLeads.length > 0) return { domains, source, html: JSON.stringify(payload), evidence, mapLeads };
+    } catch { /* Continue with another metasearch instance or a direct provider. */ }
+  }
+  const providerSources = [
+    [`https://html.duckduckgo.com/html/?q=${encoded}&s=${offset}`, `https://lite.duckduckgo.com/lite/?q=${encoded}&s=${offset}`],
+    [`https://r.jina.ai/http://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`, `https://www.bing.com/search?q=${encoded}&count=10&first=${bingFirst}`],
+    [`https://r.jina.ai/http://search.brave.com/search?q=${encoded}&source=web&offset=${providerPage}`, `https://search.brave.com/search?q=${encoded}&source=web&offset=${providerPage}`],
+    [`https://www.google.com/search?q=${encoded}&start=${offset}`, `https://r.jina.ai/http://www.google.com/search?q=${encoded}&start=${offset}`],
+    [`https://yandex.ru/search/?text=${encoded}&p=${providerPage}`, `https://r.jina.ai/http://yandex.ru/search/?text=${encoded}&p=${providerPage}`],
   ];
+  const preferredProvider = page % providerSources.length;
+  const sources = providerSources[preferredProvider];
   let lastError: unknown;
   for (const source of sources) {
     try {
-      const html = await fetchText(source, 8000);
+      const html = await fetchText(source, 6000);
       const domains = domainsFromSearchHtml(html);
-      if (domains.length > 0) return { domains: domains.slice(0, 15), source, html };
+      if (domains.length > 0) return { domains, source, html, evidence: {}, mapLeads: [] };
       lastError = new Error("Поисковая выдача не содержит сайтов.");
     } catch (error) { lastError = error; }
   }
   throw lastError instanceof Error ? lastError : new Error("Открытые поисковые источники недоступны.");
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try { results[index] = { status: "fulfilled", value: await task(items[index]) }; }
+      catch (reason) { results[index] = { status: "rejected", reason }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+function regulationSourceLinks(base: string, region: string): string[] {
+  const query = `${base} ${region}`.trim();
+  const encoded = encodeURIComponent(query);
+  return [
+    `https://www.google.com/search?q=${encoded}`,
+    `https://yandex.ru/search/?text=${encoded}`,
+    `https://yandex.ru/maps/?text=${encoded}`,
+    `https://2gis.ru/search/${encoded}`,
+    `https://www.perplexity.ai/search?q=${encoded}`,
+    `https://www.youtube.com/results?search_query=${encoded}`,
+    `https://vk.com/search?c%5Bq%5D=${encoded}`,
+    `https://t.me/s/${encodeURIComponent(base.split(" ").slice(0, 2).join("_"))}`,
+    "https://checko.ru/",
+    "https://www.rusprofile.ru/",
+  ];
 }
 
 function capitalizeSentences(row: AnalysisRow): AnalysisRow {
@@ -261,7 +338,7 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
     "информационный портал", "рейтинг банков", "сравнение банков", "выбрать банк", "все банки россии",
   ];
   if (strongInformationalMarkers.some((marker) => introductoryText.includes(marker) && !descriptionLower.includes(marker))) return 0;
-  if (categoryStems.length > 0 && !categoryStems.some((stem) => introductoryText.includes(stem))) return 0;
+  if (categoryStems.length > 0 && !categoryStems.some((stem) => primary.includes(stem))) return 0;
   const candidateText = `${primary} ${body}`;
   const segmentRules = [
     { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|корпоративн|компани|организаци|\bb2b\b/ },
@@ -271,8 +348,7 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
   const primaryMatches = stems.filter((stem) => primary.includes(stem)).length;
   const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
-  if (primaryMatches < 2 && bodyMatches < 4) return 0;
-  return primaryMatches * 3 + bodyMatches;
+  return Math.max(3, primaryMatches * 3 + bodyMatches);
 }
 
 function price(text: string): string {
@@ -309,7 +385,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description, searchEvidence = ""): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -330,7 +406,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       errorNote = ` Страница не открылась автоматически: ${directError instanceof Error ? directError.message : "ошибка сети"}.`;
     }
   }
-  const metaDescription = metaDescriptionFromHtml(html) || readerDescription(html);
+  const metaDescription = metaDescriptionFromHtml(html) || readerDescription(html) || firstUsefulSentence(searchEvidence);
   const inputProduct = firstUsefulSentence(input.description, "Описание продукта не указано.");
   const siteProduct = firstUsefulSentence(metaDescription, title);
   const product = isClient ? inputProduct : siteProduct;
@@ -380,55 +456,115 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
-    relevance: relevanceScore(`${title} ${metaDescription}`, text, relevanceContext),
+    relevance: relevanceScore(`${title} ${metaDescription} ${searchEvidence}`, `${text} ${searchEvidence}`, relevanceContext),
   };
 }
 
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
+  const startedAt = Date.now();
   let normalizedUrl = input.projectUrl.trim();
   if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
   const clientDomain = normalizeDomain(normalizedUrl);
   if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
   const projectContext = await projectSearchContext(input, clientDomain);
   const queries = makeQueries(input, clientDomain, projectContext.text, projectContext.brandStems);
-  const sources: string[] = [normalizedUrl];
+  const basePhrase = compactSearchPhrase(projectContext.text, projectContext.brandStems);
+  const sources: string[] = [normalizedUrl, ...regulationSourceLinks(basePhrase, input.region)];
   const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
 
   const counts = new Map<string, number>();
-  for (const query of queries) {
-    try {
-      const result = await searchWeb(query);
+  const evidenceByDomain = new Map<string, string>();
+  const mapLeads = new Set<string>();
+  const searchTasks = queries.flatMap((query) => [0, 1, 2].map((page) => ({ query, page })));
+  const searchResults = await mapWithConcurrency(searchTasks, 2, ({ query, page }) => searchWeb(query, page));
+  for (const settled of searchResults) {
+    if (settled.status === "fulfilled") {
+      const result = settled.value;
       sources.push(result.source);
+      result.mapLeads.forEach((lead) => mapLeads.add(lead));
       for (const domain of result.domains) {
         const candidateLabel = domain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
         const repeatsClientBrand = clientDomainLabel.length >= 4 && candidateLabel.includes(clientDomainLabel);
-        if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`) && !repeatsClientBrand) counts.set(domain, (counts.get(domain) || 0) + 1);
+        if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`) && !repeatsClientBrand) {
+          counts.set(domain, (counts.get(domain) || 0) + 1);
+          const evidence = result.evidence[domain];
+          if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
+        }
       }
-    } catch { /* A blocked search query does not invalidate successful queries. */ }
+    }
+  }
+  if (mapLeads.size > 0) {
+    const leadSearches = await mapWithConcurrency([...mapLeads], 2, (lead) => searchWeb(`${lead} ${basePhrase} официальный сайт ${input.region}`, 0));
+    for (const settled of leadSearches) {
+      if (settled.status !== "fulfilled") continue;
+      sources.push(settled.value.source);
+      for (const domain of settled.value.domains) {
+        if (domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+        counts.set(domain, (counts.get(domain) || 0) + 1);
+        const evidence = settled.value.evidence[domain];
+        if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
+      }
+    }
   }
   const seenDomains = new Set<string>();
   const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).filter(([domain]) => {
+    if (domain.endsWith(".blog") && !/блог|медиа|журнал|издани/i.test(input.description)) return false;
     const base = registrableDomain(domain);
     if (seenDomains.has(base)) return false;
     seenDomains.add(base);
     return true;
-  }).slice(0, 15);
+  });
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
-  const [client, checkedCandidates] = await Promise.all([
-    analyzeDomain(clientDomain, input, true),
-    Promise.all(candidates.map(async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text)) }))),
-  ]);
-  const competitors = checkedCandidates
+  const clientPromise = analyzeDomain(clientDomain, input, true);
+  const checkedCandidates = (await mapWithConcurrency(candidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+    .flatMap((settled) => settled.status === "fulfilled" ? [settled.value] : []);
+  const client = await clientPromise;
+  let competitors = checkedCandidates
     .filter((candidate) => candidate.relevance >= 3)
-    .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions)
-    .slice(0, 5);
+    .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
-  await Promise.all(competitors.map(async (competitor) => {
+
+  const knownBases = new Set(candidates.map(([domain]) => registrableDomain(domain)));
+  for (let round = 0; round < 2 && Date.now() - startedAt < 80000; round += 1) {
+    const expansionContext = competitors.map((candidate) => candidate.row["Тип продукта"]).join(" ");
+    const expansionBase = compactSearchPhrase(expansionContext);
+    if (!expansionBase) break;
+    const expansionQueries = [
+      `${expansionBase} ${input.region}`,
+      `${expansionBase} компании сервисы услуги ${input.region}`,
+      `${expansionBase} конкуренты аналоги список ${input.region}`,
+      `${expansionBase} платформы центры производители ${input.region}`,
+    ];
+    const expansionTasks = expansionQueries.flatMap((query) => [0, 1, 2].map((page) => ({ query, page })));
+    const expansionSearches = await mapWithConcurrency(expansionTasks, 2, ({ query, page }) => searchWeb(query, page));
+    const newlyFound = new Map<string, number>();
+    for (const settled of expansionSearches) {
+      if (settled.status !== "fulfilled") continue;
+      sources.push(settled.value.source);
+      for (const domain of settled.value.domains) {
+        const base = registrableDomain(domain);
+        if (knownBases.has(base) || domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+        if (domain.endsWith(".blog") && !/блог|медиа|журнал|издани/i.test(input.description)) continue;
+        knownBases.add(base);
+        newlyFound.set(domain, (newlyFound.get(domain) || 0) + 1);
+        const evidence = settled.value.evidence[domain];
+        if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
+      }
+    }
+    if (newlyFound.size === 0) break;
+    const expandedCandidates = (await mapWithConcurrency([...newlyFound.entries()], 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+      .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= 3 ? [settled.value] : []);
+    if (expandedCandidates.length === 0) break;
+    competitors = [...competitors, ...expandedCandidates]
+      .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
+  }
+
+  await mapWithConcurrency(competitors, 10, async (competitor) => {
     const legal = await legalLookup(competitor.domain);
     competitor.row["ОКВЭД"] = legal.okved;
     competitor.row["Оборотка"] = legal.turnover;
     if (legal.source) competitor.sources.push(legal.source);
-  }));
+  });
   const rows = [client.row, ...competitors.map((result) => result.row)].map(capitalizeSentences);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
   return { rows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
