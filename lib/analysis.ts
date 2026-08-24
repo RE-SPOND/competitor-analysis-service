@@ -12,9 +12,9 @@ const blockedDomains = new Set([
   "yandex.ru", "ya.ru", "google.com", "bing.com", "duckduckgo.com", "brave.com", "jina.ai", "microsoft.com", "apple.com",
   "youtube.com", "vk.com", "ok.ru", "dzen.ru", "rutube.ru", "t.me",
   "2gis.ru", "checko.ru", "rusprofile.ru", "vc.ru", "t-j.ru", "wikipedia.org",
-  "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru",
+  "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru", "mail.ru", "psymag.info",
   "rbc.ru", "rb.ru", "forbes.ru", "ria.ru", "smi2.ru", "sostav.ru", "cossa.ru", "adindex.ru",
-  "irecommend.ru", "otzovik.com",
+  "irecommend.ru", "otzovik.com", "tobiz.net",
 ]);
 
 function isTechnicalDomain(domain: string): boolean {
@@ -96,16 +96,26 @@ function domainsFromSearchHtml(html: string): string[] {
   return domainsFromUrls(urls);
 }
 
-function makeQueries(input: AnalysisInput): string[] {
+function compactSearchPhrase(value: string): string {
+  const stopWords = new Set([
+    "который", "которая", "которые", "помогает", "предлагает", "ориентирован", "доступен", "доступны",
+    "компания", "проект", "продукт", "сервис", "себя", "также", "разные", "форматы", "формат", "через",
+    "среди", "после", "чтобы", "этого", "этот", "этой", "своих", "своей", "можно", "нужно", "личный",
+  ]);
+  return value.toLowerCase().match(/[a-zа-яё0-9-]{4,}/giu)?.filter((word) => !stopWords.has(word)).slice(0, 9).join(" ") || value.slice(0, 100);
+}
+
+function makeQueries(input: AnalysisInput, clientDomain: string): string[] {
   const region = input.region.trim();
-  const base = firstUsefulSentence(input.description).replace(/\s+/g, " ").slice(0, 180);
+  const base = compactSearchPhrase(input.description);
+  const brand = brandNameFromDomain(clientDomain);
   const standard = [
     `${base} ${region}`,
+    `${base} сервисы и компании ${region}`,
     `${base} аналоги`,
-    `${base} конкуренты`,
-    `лучшие сервисы и компании ${base}`,
-    `заказать ${base} ${region}`,
     `${base} цены`,
+    `${brand} конкуренты`,
+    `${brand} аналоги`,
   ];
   return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 6);
 }
@@ -144,6 +154,13 @@ function capitalizeSentences(row: AnalysisRow): AnalysisRow {
 function findAny(text: string, words: string[]): boolean { const lower = text.toLowerCase(); return words.some((word) => lower.includes(word)); }
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
+function relevanceScore(text: string, description: string): number {
+  const ignored = new Set(["онлайн", "сервис", "услуга", "услуги", "компания", "проект", "продукт", "работа", "клиент", "клиенты", "решение", "решения"]);
+  const stems = [...new Set((description.toLowerCase().match(/[a-zа-яё]{5,}/giu) || []).filter((word) => !ignored.has(word)).map((word) => word.slice(0, 6)))];
+  const haystack = text.toLowerCase();
+  return stems.filter((stem) => haystack.includes(stem)).length;
+}
+
 function price(text: string): string {
   const match = text.match(/(?:от\s*)?\d[\d\s]{2,12}\s?(?:₽|руб(?:лей)?)/i);
   return match ? match[0].replace(/\s+/g, " ") : "Цена на сайте не указана.";
@@ -173,7 +190,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false): Promise<{ row: AnalysisRow; sources: string[] }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -231,6 +248,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
+    relevance: relevanceScore(`${title} ${metaDescription} ${text.slice(0, 12000)}`, input.description),
   };
 }
 
@@ -239,7 +257,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
   const clientDomain = normalizeDomain(normalizedUrl);
   if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
-  const queries = makeQueries(input);
+  const queries = makeQueries(input, clientDomain);
   const sources: string[] = [normalizedUrl];
 
   const counts = new Map<string, number>();
@@ -250,11 +268,24 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       for (const domain of result.domains) { if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`)) counts.set(domain, (counts.get(domain) || 0) + 1); }
     } catch { /* A blocked search query does not invalidate successful queries. */ }
   }
-  const competitors = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([domain]) => domain).slice(0, 5);
-  if (competitors.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
-  const client = await analyzeDomain(clientDomain, input, true);
-  const competitorResults = await Promise.all(competitors.map((domain) => analyzeDomain(domain, input, false)));
-  const rows = [client.row, ...competitorResults.map((result) => result.row)].map(capitalizeSentences);
-  for (const result of [client, ...competitorResults]) sources.push(...result.sources);
+  const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+  if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
+  const [client, checkedCandidates] = await Promise.all([
+    analyzeDomain(clientDomain, input, true),
+    Promise.all(candidates.map(async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true)) }))),
+  ]);
+  const competitors = checkedCandidates
+    .filter((candidate) => candidate.relevance >= 2)
+    .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions)
+    .slice(0, 5);
+  if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
+  await Promise.all(competitors.map(async (competitor) => {
+    const legal = await legalLookup(competitor.domain);
+    competitor.row["ОКВЭД"] = legal.okved;
+    competitor.row["Оборотка"] = legal.turnover;
+    if (legal.source) competitor.sources.push(legal.source);
+  }));
+  const rows = [client.row, ...competitors.map((result) => result.row)].map(capitalizeSentences);
+  for (const result of [client, ...competitors]) sources.push(...result.sources);
   return { rows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
 }
