@@ -102,20 +102,23 @@ function compactSearchPhrase(value: string): string {
     "компания", "проект", "продукт", "сервис", "себя", "также", "разные", "форматы", "формат", "через",
     "среди", "после", "чтобы", "этого", "этот", "этой", "своих", "своей", "можно", "нужно", "личный",
   ]);
-  return value.toLowerCase().match(/[a-zа-яё0-9-]{4,}/giu)?.filter((word) => !stopWords.has(word)).slice(0, 9).join(" ") || value.slice(0, 100);
+  const words = value.toLowerCase().match(/[a-zа-яё0-9-]{4,}/giu)?.filter((word) => !stopWords.has(word)) || [];
+  const audienceWords = words.filter((word) => /предприним|юридичес|бизнес|корпоратив|малого|среднего|b2b|b2c|дет|родител/.test(word));
+  return [...new Set([...words.slice(0, 4), ...audienceWords])].slice(0, 7).join(" ") || value.slice(0, 100);
 }
 
 function makeQueries(input: AnalysisInput, clientDomain: string): string[] {
   const region = input.region.trim();
   const base = compactSearchPhrase(input.description);
   const brand = brandNameFromDomain(clientDomain);
+  const category = base.split(" ")[0] || brand;
+  const isBusinessProduct = /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/i.test(input.description);
   const standard = [
     `${base} ${region}`,
     `${base} сервисы и компании ${region}`,
     `${base} аналоги`,
     `${base} цены`,
-    `${brand} конкуренты`,
-    `${brand} аналоги`,
+    ...(isBusinessProduct ? [`${category} для бизнеса расчётный счёт РКО ИП ООО ${region}`, `${category} для малого и среднего бизнеса ${region}`] : [`${brand} конкуренты`, `${brand} аналоги`]),
   ];
   return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 6);
 }
@@ -135,7 +138,7 @@ async function searchWeb(query: string): Promise<SearchResponse> {
     try {
       const html = await fetchText(source);
       const domains = domainsFromSearchHtml(html);
-      if (domains.length > 0) return { domains: domains.slice(0, 10), source, html };
+      if (domains.length > 0) return { domains: domains.slice(0, 15), source, html };
       lastError = new Error("Поисковая выдача не содержит сайтов.");
     } catch (error) { lastError = error; }
   }
@@ -154,16 +157,48 @@ function capitalizeSentences(row: AnalysisRow): AnalysisRow {
 function findAny(text: string, words: string[]): boolean { const lower = text.toLowerCase(); return words.some((word) => lower.includes(word)); }
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
-function relevanceScore(text: string, description: string): number {
-  const ignored = new Set(["онлайн", "сервис", "услуга", "услуги", "компания", "проект", "продукт", "работа", "клиент", "клиенты", "решение", "решения"]);
-  const stems = [...new Set((description.toLowerCase().match(/[a-zа-яё]{5,}/giu) || []).filter((word) => !ignored.has(word)).map((word) => word.slice(0, 6)))];
-  const haystack = text.toLowerCase();
-  return stems.filter((stem) => haystack.includes(stem)).length;
+function relevanceScore(primaryText: string, bodyText: string, description: string): number {
+  const ignored = new Set([
+    "онлайн", "сервис", "сервисы", "услуга", "услуги", "компания", "компании", "проект", "продукт", "работа",
+    "клиент", "клиенты", "решение", "решения", "российский", "создание", "создании", "помогает", "предлагает",
+    "бизнес", "юридический", "юридических", "предприниматель", "предпринимателей", "малого", "среднего",
+  ]);
+  const words = description.toLowerCase().match(/[a-zа-яё]{4,}/giu) || [];
+  const meaningfulStems = words.filter((word) => !ignored.has(word)).map((word) => word.slice(0, 6));
+  const stems = [...new Set(meaningfulStems)];
+  const stemCounts = meaningfulStems.reduce((counts, stem) => counts.set(stem, (counts.get(stem) || 0) + 1), new Map<string, number>());
+  const repeatedCategoryStems = [...stemCounts.entries()].filter(([, count]) => count > 1).map(([stem]) => stem);
+  const primary = primaryText.toLowerCase();
+  const body = bodyText.toLowerCase().slice(0, 3000);
+  const informationalMarkers = [
+    "энциклопед", "википед", "каталог", "рейтинг", "обзор", "блог", "журнал", "новост", "форум", "урок",
+    "справочник", "часы работы", "адреса отделений", "адреса банкомат", "маркетплейс", "центральный банк", "регулятор",
+    "подбор", "сравните", "сравнение", "финансовый портал", "кредитный брокер", "агрегатор",
+  ];
+  const descriptionLower = description.toLowerCase();
+  if (informationalMarkers.some((marker) => primary.includes(marker) && !descriptionLower.includes(marker))) return 0;
+  if (repeatedCategoryStems.length > 0 && !repeatedCategoryStems.some((stem) => primary.includes(stem))) return 0;
+  const candidateText = `${primary} ${body}`;
+  const segmentRules = [
+    { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|\bрко\b|расч[её]тн.{0,10}сч[её]т|корпоративн|\bип\b/ },
+    { signal: /детск|для детей|родител/, terms: /детск|для детей|реб[её]н|подрост|родител/ },
+    { signal: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/, terms: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/ },
+  ];
+  if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
+  const primaryMatches = stems.filter((stem) => primary.includes(stem)).length;
+  const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
+  if (repeatedCategoryStems.length === 0 && primaryMatches < 2 && bodyMatches < 4) return 0;
+  return primaryMatches * 3 + bodyMatches;
 }
 
 function price(text: string): string {
   const match = text.match(/(?:от\s*)?\d[\d\s]{2,12}\s?(?:₽|руб(?:лей)?)/i);
   return match ? match[0].replace(/\s+/g, " ") : "Цена на сайте не указана.";
+}
+
+function registrableDomain(domain: string): string {
+  const parts = normalizeDomain(domain).split(".");
+  return parts.length > 1 ? parts.slice(-2).join(".") : domain;
 }
 
 function contactChannels(html: string, text: string): string {
@@ -225,7 +260,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   const weaknesses = [currentPrice.startsWith("Цена на") ? "нет прозрачной цены" : "", cases.startsWith("Да") ? "" : "не найдены подробные кейсы или отзывы", errorNote ? "ограниченный автоматический доступ к сайту" : ""].filter(Boolean).join("; ");
   const legal = skipLegal ? { okved: "", turnover: "", source: "" } : await legalLookup(domain);
   const titleName = title.split(/[|–—-]/)[0].trim();
-  const titleIsGeneric = titleName === domain || titleName.length > 60 || /^(главная|официальный сайт|психологи онлайн|поиск|приём|каталог)$/i.test(titleName);
+  const titleIsGeneric = titleName === domain || titleName.length > 60 || /^(главная|официальный сайт|психологи онлайн|поиск|приём|каталог|интернет)$/i.test(titleName);
   const siteNameIsGeneric = siteName.length > 18 && /психолог|консультац|онлайн/i.test(siteName);
   const displayName = ((siteName && !siteNameIsGeneric ? siteName : "") || (titleIsGeneric ? brandNameFromDomain(domain) : titleName) || brandNameFromDomain(domain)).slice(0, 100);
   return {
@@ -248,7 +283,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
-    relevance: relevanceScore(`${title} ${metaDescription} ${text.slice(0, 12000)}`, input.description),
+    relevance: relevanceScore(`${title} ${metaDescription}`, text, input.description),
   };
 }
 
@@ -268,14 +303,20 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       for (const domain of result.domains) { if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`)) counts.set(domain, (counts.get(domain) || 0) + 1); }
     } catch { /* A blocked search query does not invalidate successful queries. */ }
   }
-  const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const seenDomains = new Set<string>();
+  const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).filter(([domain]) => {
+    const base = registrableDomain(domain);
+    if (seenDomains.has(base)) return false;
+    seenDomains.add(base);
+    return true;
+  }).slice(0, 30);
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const [client, checkedCandidates] = await Promise.all([
     analyzeDomain(clientDomain, input, true),
     Promise.all(candidates.map(async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true)) }))),
   ]);
   const competitors = checkedCandidates
-    .filter((candidate) => candidate.relevance >= 2)
+    .filter((candidate) => candidate.relevance >= 3)
     .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions)
     .slice(0, 5);
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
