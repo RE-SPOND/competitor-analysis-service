@@ -381,7 +381,7 @@ function capitalizeSentences(row: AnalysisRow): AnalysisRow {
 function findAny(text: string, words: string[]): boolean { const lower = text.toLowerCase(); return words.some((word) => lower.includes(word)); }
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
-function relevanceScore(primaryText: string, bodyText: string, description: string): number {
+function relevanceScore(primaryText: string, bodyText: string, description: string, searchEvidence = ""): number {
   const ignored = new Set([
     "онлайн", "сервис", "сервисы", "услуга", "услуги", "компания", "компании", "проект", "продукт", "работа",
     "клиент", "клиенты", "решение", "решения", "российский", "создание", "создании", "помогает", "предлагает",
@@ -397,6 +397,7 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
     .slice(0, 4);
   const primary = primaryText.toLowerCase();
   const body = bodyText.toLowerCase().slice(0, 3000);
+  const evidence = searchEvidence.toLowerCase();
   const informationalMarkers = [
     "энциклопед", "википед", "каталог", "рейтинг", "обзор", "блог", "журнал", "новост", "форум", "урок",
     "справочник", "часы работы", "адреса отделений", "адреса банкомат", "маркетплейс", "центральный банк", "регулятор",
@@ -412,15 +413,19 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
     "информационный портал", "рейтинг банков", "сравнение банков", "выбрать банк", "все банки россии",
   ];
   if (strongInformationalMarkers.some((marker) => introductoryText.includes(marker) && !descriptionLower.includes(marker))) return 0;
-  if (categoryStems.length > 0 && !categoryStems.some((stem) => primary.includes(stem))) return 0;
-  const candidateText = `${primary} ${body}`;
+  if (categoryStems.length > 0 && !categoryStems.some((stem) => `${primary} ${evidence}`.includes(stem))) return 0;
+  const industryRules = [
+    { signal: /(?:^|\s)банк(?:\s|$)|банковск/iu, terms: /банк|банковск|bank/iu },
+  ];
+  if (industryRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(primary))) return 0;
+  const candidateText = `${primary} ${body} ${evidence}`;
   const segmentRules = [
     { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|корпоративн|компани|организаци|\bb2b\b/ },
     { signal: /детск|для детей|родител/, terms: /детск|для детей|реб[её]н|подрост|родител/ },
     { signal: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/, terms: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/ },
   ];
   if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
-  const primaryMatches = stems.filter((stem) => primary.includes(stem)).length;
+  const primaryMatches = stems.filter((stem) => `${primary} ${evidence}`.includes(stem)).length;
   const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
   return Math.max(3, primaryMatches * 3 + bodyMatches);
 }
@@ -529,7 +534,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
-    relevance: relevanceScore(`${title} ${metaDescription} ${searchEvidence}`, `${text} ${searchEvidence}`, relevanceContext),
+    relevance: relevanceScore(`${title} ${metaDescription}`, text, relevanceContext, searchEvidence),
   };
 }
 
