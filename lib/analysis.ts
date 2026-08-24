@@ -101,29 +101,96 @@ function domainsFromSearchHtml(html: string): string[] {
   return domainsFromUrls(urls);
 }
 
-function compactSearchPhrase(value: string): string {
-  const stopWords = new Set([
-    "который", "которая", "которые", "помогает", "предлагает", "ориентирован", "доступен", "доступны",
-    "компания", "проект", "продукт", "сервис", "себя", "также", "разные", "форматы", "формат", "через",
-    "среди", "после", "чтобы", "этого", "этот", "этой", "своих", "своей", "можно", "нужно", "личный",
-  ]);
-  const words = value.toLowerCase().match(/[a-zа-яё0-9-]{4,}/giu)?.filter((word) => !stopWords.has(word)) || [];
-  const audienceWords = words.filter((word) => /предприним|юридичес|бизнес|корпоратив|малого|среднего|b2b|b2c|дет|родител/.test(word));
-  return [...new Set([...words.slice(0, 4), ...audienceWords])].slice(0, 7).join(" ") || value.slice(0, 100);
+const searchStopWords = new Set([
+  "который", "которая", "которые", "помогает", "предлагает", "ориентирован", "доступен", "доступны",
+  "компания", "проект", "продукт", "сервис", "сервисы", "себя", "также", "разные", "форматы", "формат",
+  "через", "среди", "после", "чтобы", "этого", "этот", "этой", "своих", "своей", "можно", "нужно",
+  "личный", "основной", "является", "работает", "работают", "включает", "позволяет", "доступный", "клиент",
+  "клиенты", "решение", "решения", "рынок", "сайт", "официальный", "главная", "россия", "москва",
+]);
+
+function searchWords(value: string): string[] {
+  return value.toLowerCase().match(/[a-zа-яё0-9-]{4,}/giu)?.filter((word) => !searchStopWords.has(word)) || [];
 }
 
-function makeQueries(input: AnalysisInput, clientDomain: string): string[] {
+function wordStem(word: string): string {
+  return word.replace(/[^a-zа-яё0-9]/giu, "").slice(0, 7);
+}
+
+const organizationDescriptors = new Set([
+  "банк", "банка", "сервис", "платформа", "компания", "магазин", "производитель", "производство", "агентство",
+  "студия", "школа", "клиника", "центр", "завод", "салон", "приложение", "маркетплейс", "лаборатория",
+]);
+
+function compactSearchPhrase(value: string, excludedWords = new Set<string>()): string {
+  const words = searchWords(value).filter((word) => !excludedWords.has(wordStem(word)));
+  const grouped = new Map<string, { word: string; count: number; first: number }>();
+  words.forEach((word, index) => {
+    const stem = wordStem(word);
+    const current = grouped.get(stem);
+    if (current) current.count += 1;
+    else grouped.set(stem, { word, count: 1, first: index });
+  });
+  const ranked = [...grouped.values()]
+    .sort((a, b) => b.count - a.count || a.first - b.first)
+    .map((item) => item.word);
+  const audienceWords = words.filter((word) => /предприним|юридичес|бизнес|корпоратив|малого|среднего|b2b|b2c|дет|родител|студент|специалист|пациент|покупател|потребител/.test(word));
+  return [...new Set([...ranked.slice(0, 5), ...audienceWords])].slice(0, 6).join(" ") || value.slice(0, 100);
+}
+
+function audiencePhrase(value: string): string {
+  const patterns = [
+    /для\s+(?:малого\s+и\s+среднего\s+)?бизнеса/iu,
+    /для\s+предпринимателей/iu,
+    /для\s+юридических\s+лиц/iu,
+    /для\s+частных\s+клиентов/iu,
+    /для\s+(?:детей|родителей|студентов|специалистов|пациентов|покупателей|потребителей)/iu,
+    /\b(?:b2b|b2c)\b/iu,
+  ];
+  return patterns.map((pattern) => value.match(pattern)?.[0]).find(Boolean) || "";
+}
+
+async function projectSearchContext(input: AnalysisInput, clientDomain: string): Promise<{ text: string; brandStems: Set<string> }> {
+  let html = "";
+  try {
+    html = await fetchText(`https://${clientDomain}/`, 8000);
+  } catch {
+    try { html = await fetchText(`https://r.jina.ai/https://${clientDomain}/`, 8000); } catch { /* The user's description remains the fallback. */ }
+  }
+  const title = titleFromHtml(html);
+  const siteName = siteNameFromHtml(html);
+  const siteContext = [title, metaDescriptionFromHtml(html), readerDescription(html)].filter(Boolean).join(" ");
+  const identityFragments = [
+    brandNameFromDomain(clientDomain),
+    siteName,
+    title.split(/[|–—-]/)[0],
+    input.description.match(/^(.{2,60}?)\s+[—–-]\s+/u)?.[1] || "",
+  ].filter((fragment) => fragment && searchWords(fragment).length <= 4);
+  const brandStems = new Set(identityFragments.flatMap(searchWords)
+    .filter((word) => !organizationDescriptors.has(word))
+    .map(wordStem));
+  const combinedText = `${input.description} ${siteContext}`.replace(/\s+/g, " ").trim().slice(0, 2500);
+  const textWithoutBrand = combinedText.split(/\s+/)
+    .filter((word) => !brandStems.has(wordStem(word.toLowerCase())))
+    .join(" ");
+  return {
+    text: textWithoutBrand,
+    brandStems,
+  };
+}
+
+function makeQueries(input: AnalysisInput, clientDomain: string, context: string, brandStems: Set<string>): string[] {
   const region = input.region.trim();
-  const base = compactSearchPhrase(input.description);
+  const base = compactSearchPhrase(context, brandStems);
   const brand = brandNameFromDomain(clientDomain);
-  const category = base.split(" ")[0] || brand;
-  const isBusinessProduct = /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/i.test(input.description);
+  const audience = audiencePhrase(context);
   const standard = [
     `${base} ${region}`,
-    `${base} сервисы и компании ${region}`,
-    `${base} аналоги`,
-    `${base} цены`,
-    ...(isBusinessProduct ? [`${category} для бизнеса расчётный счёт РКО ИП ООО ${region}`, `${category} для малого и среднего бизнеса ${region}`] : [`${brand} конкуренты`, `${brand} аналоги`]),
+    `${base} компании ${region}`,
+    `${base} аналоги конкуренты`,
+    `${base} цены стоимость ${region}`,
+    `${brand} конкуренты аналоги`,
+    audience ? `${base} ${audience} ${region}` : `${base} предложения ${region}`,
   ];
   return [...new Set(standard.map((query) => query.replace(/\s+/g, " ").trim()))].slice(0, 6);
 }
@@ -169,31 +236,42 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
     "клиент", "клиенты", "решение", "решения", "российский", "создание", "создании", "помогает", "предлагает",
     "бизнес", "юридический", "юридических", "предприниматель", "предпринимателей", "малого", "среднего",
   ]);
-  const words = description.toLowerCase().match(/[a-zа-яё]{4,}/giu) || [];
-  const meaningfulStems = words.filter((word) => !ignored.has(word)).map((word) => word.slice(0, 6));
+  const words = searchWords(description).filter((word) => !ignored.has(word));
+  const meaningfulStems = words.map(wordStem);
   const stems = [...new Set(meaningfulStems)];
   const stemCounts = meaningfulStems.reduce((counts, stem) => counts.set(stem, (counts.get(stem) || 0) + 1), new Map<string, number>());
-  const repeatedCategoryStems = [...stemCounts.entries()].filter(([, count]) => count > 1).map(([stem]) => stem);
+  const segmentStem = /^(предпри|юридич|бизнес|корпора|малого|среднег|частных|клиент|детей|родител|студент|специал|пациен|покупат|потреби|российс)/;
+  const categoryStems = stems.filter((stem) => !segmentStem.test(stem))
+    .sort((a, b) => (stemCounts.get(b) || 0) - (stemCounts.get(a) || 0))
+    .slice(0, 4);
   const primary = primaryText.toLowerCase();
   const body = bodyText.toLowerCase().slice(0, 3000);
   const informationalMarkers = [
     "энциклопед", "википед", "каталог", "рейтинг", "обзор", "блог", "журнал", "новост", "форум", "урок",
     "справочник", "часы работы", "адреса отделений", "адреса банкомат", "маркетплейс", "центральный банк", "регулятор",
-    "подбор", "сравните", "сравнение", "финансовый портал", "кредитный брокер", "агрегатор",
+    "финансовый портал", "кредитный брокер", "агрегатор", "исследовательская компания",
+    "исследования рынка", "отраслевая аналитика", "аналитический портал", "информационный портал", "рейтинг банков",
+    "сравнение банков", "выбрать банк", "все банки россии",
   ];
   const descriptionLower = description.toLowerCase();
+  const introductoryText = `${primary} ${body.slice(0, 800)}`;
   if (informationalMarkers.some((marker) => primary.includes(marker) && !descriptionLower.includes(marker))) return 0;
-  if (repeatedCategoryStems.length > 0 && !repeatedCategoryStems.some((stem) => primary.includes(stem))) return 0;
+  const strongInformationalMarkers = [
+    "исследовательская компания", "исследования рынка", "отраслевая аналитика", "аналитический портал",
+    "информационный портал", "рейтинг банков", "сравнение банков", "выбрать банк", "все банки россии",
+  ];
+  if (strongInformationalMarkers.some((marker) => introductoryText.includes(marker) && !descriptionLower.includes(marker))) return 0;
+  if (categoryStems.length > 0 && !categoryStems.some((stem) => introductoryText.includes(stem))) return 0;
   const candidateText = `${primary} ${body}`;
   const segmentRules = [
-    { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|\bрко\b|расч[её]тн.{0,10}сч[её]т|корпоративн|\bип\b/ },
+    { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|корпоративн|компани|организаци|\bb2b\b/ },
     { signal: /детск|для детей|родител/, terms: /детск|для детей|реб[её]н|подрост|родител/ },
     { signal: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/, terms: /физическ.{0,12}лиц|частн.{0,10}клиент|розничн/ },
   ];
   if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
   const primaryMatches = stems.filter((stem) => primary.includes(stem)).length;
   const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
-  if (repeatedCategoryStems.length === 0 && primaryMatches < 2 && bodyMatches < 4) return 0;
+  if (primaryMatches < 2 && bodyMatches < 4) return 0;
   return primaryMatches * 3 + bodyMatches;
 }
 
@@ -231,7 +309,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -302,7 +380,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Оборотка": legal.turnover,
     },
     sources: [url, legal.source].filter(Boolean),
-    relevance: relevanceScore(`${title} ${metaDescription}`, text, input.description),
+    relevance: relevanceScore(`${title} ${metaDescription}`, text, relevanceContext),
   };
 }
 
@@ -311,7 +389,8 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
   const clientDomain = normalizeDomain(normalizedUrl);
   if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
-  const queries = makeQueries(input, clientDomain);
+  const projectContext = await projectSearchContext(input, clientDomain);
+  const queries = makeQueries(input, clientDomain, projectContext.text, projectContext.brandStems);
   const sources: string[] = [normalizedUrl];
   const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
 
@@ -337,7 +416,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const [client, checkedCandidates] = await Promise.all([
     analyzeDomain(clientDomain, input, true),
-    Promise.all(candidates.map(async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true)) }))),
+    Promise.all(candidates.map(async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text)) }))),
   ]);
   const competitors = checkedCandidates
     .filter((candidate) => candidate.relevance >= 3)
