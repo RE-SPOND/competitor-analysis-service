@@ -9,7 +9,7 @@ export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: 
 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
-  "yandex.ru", "ya.ru", "google.com", "bing.com", "duckduckgo.com", "brave.com", "microsoft.com", "apple.com",
+  "yandex.ru", "ya.ru", "google.com", "bing.com", "duckduckgo.com", "brave.com", "jina.ai", "microsoft.com", "apple.com",
   "youtube.com", "vk.com", "ok.ru", "dzen.ru", "rutube.ru", "t.me",
   "2gis.ru", "checko.ru", "rusprofile.ru", "vc.ru", "t-j.ru", "wikipedia.org",
   "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru",
@@ -114,6 +114,8 @@ type SearchResponse = { domains: string[]; source: string; html: string };
 
 async function searchWeb(query: string): Promise<SearchResponse> {
   const sources = [
+    `https://r.jina.ai/http://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
+    `https://r.jina.ai/http://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
     `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
     `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
     `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
