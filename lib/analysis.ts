@@ -59,6 +59,11 @@ function metaDescriptionFromHtml(html: string): string {
   return match ? pageText(match[1]).slice(0, 320) : "";
 }
 
+function readerDescription(content: string): string {
+  const markdown = content.split("Markdown Content:")[1] || "";
+  return firstUsefulSentence(markdown.replace(/[#*_`()]/g, " ").replaceAll("[", " ").replaceAll("]", " ").replace(/\s+/g, " ").trim());
+}
+
 function firstUsefulSentence(value: string, fallback = ""): string {
   const sentence = value.split(/(?<=[.!?])\s+|\r?\n/).map((item) => item.trim()).find((item) => item.length >= 30);
   return (sentence || value.trim() || fallback).slice(0, 280);
@@ -233,8 +238,21 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   let title = domain;
   let siteName = "";
   let errorNote = "";
-  try { html = await fetchText(url); text = pageText(html); siteName = siteNameFromHtml(html); title = titleFromHtml(html) || domain; } catch (error) { errorNote = ` Страница не открылась автоматически: ${error instanceof Error ? error.message : "ошибка сети"}.`; }
-  const metaDescription = metaDescriptionFromHtml(html);
+  try {
+    html = await fetchText(url);
+    text = pageText(html);
+    siteName = siteNameFromHtml(html);
+    title = titleFromHtml(html) || domain;
+  } catch (directError) {
+    try {
+      html = await fetchText(`https://r.jina.ai/https://${domain}/`, 8000);
+      text = pageText(html);
+      title = html.match(/^Title:\s*(.+)$/mi)?.[1]?.trim() || domain;
+    } catch {
+      errorNote = ` Страница не открылась автоматически: ${directError instanceof Error ? directError.message : "ошибка сети"}.`;
+    }
+  }
+  const metaDescription = metaDescriptionFromHtml(html) || readerDescription(html);
   const inputProduct = firstUsefulSentence(input.description, "Описание продукта не указано.");
   const siteProduct = firstUsefulSentence(metaDescription, title);
   const product = isClient ? inputProduct : siteProduct;
@@ -315,7 +333,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     if (seenDomains.has(base)) return false;
     seenDomains.add(base);
     return true;
-  }).slice(0, 30);
+  }).slice(0, 15);
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const [client, checkedCandidates] = await Promise.all([
     analyzeDomain(clientDomain, input, true),
