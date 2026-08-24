@@ -69,8 +69,8 @@ function brandNameFromDomain(domain: string): string {
   return label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : domain;
 }
 
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept-Language": "ru-RU,ru;q=0.9" }, signal: AbortSignal.timeout(15000) });
+async function fetchText(url: string, timeoutMs = 15000): Promise<string> {
+  const response = await fetch(url, { headers: { "User-Agent": USER_AGENT, "Accept-Language": "ru-RU,ru;q=0.9" }, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.text();
 }
@@ -127,16 +127,17 @@ type SearchResponse = { domains: string[]; source: string; html: string };
 
 async function searchWeb(query: string): Promise<SearchResponse> {
   const sources = [
-    `https://r.jina.ai/http://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
-    `https://r.jina.ai/http://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
-    `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
     `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+    `https://r.jina.ai/http://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
+    `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
+    `https://r.jina.ai/http://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
     `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
   ];
   let lastError: unknown;
   for (const source of sources) {
     try {
-      const html = await fetchText(source);
+      const html = await fetchText(source, 8000);
       const domains = domainsFromSearchHtml(html);
       if (domains.length > 0) return { domains: domains.slice(0, 15), source, html };
       lastError = new Error("Поисковая выдача не содержит сайтов.");
@@ -294,13 +295,18 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
   const queries = makeQueries(input, clientDomain);
   const sources: string[] = [normalizedUrl];
+  const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
 
   const counts = new Map<string, number>();
   for (const query of queries) {
     try {
       const result = await searchWeb(query);
       sources.push(result.source);
-      for (const domain of result.domains) { if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`)) counts.set(domain, (counts.get(domain) || 0) + 1); }
+      for (const domain of result.domains) {
+        const candidateLabel = domain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
+        const repeatsClientBrand = clientDomainLabel.length >= 4 && candidateLabel.includes(clientDomainLabel);
+        if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`) && !repeatsClientBrand) counts.set(domain, (counts.get(domain) || 0) + 1);
+      }
     } catch { /* A blocked search query does not invalidate successful queries. */ }
   }
   const seenDomains = new Set<string>();
