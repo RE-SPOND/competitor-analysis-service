@@ -15,6 +15,7 @@ const blockedDomains = new Set([
   "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru", "mail.ru", "psymag.info",
   "rbc.ru", "rb.ru", "forbes.ru", "ria.ru", "smi2.ru", "sostav.ru", "cossa.ru", "adindex.ru",
   "irecommend.ru", "otzovik.com", "tobiz.net",
+  "banki.ru", "brobank.ru", "bankiros.ru", "sravni.ru", "vyberu.ru", "rkobiz.ru",
 ]);
 
 function isTechnicalDomain(domain: string): boolean {
@@ -209,6 +210,7 @@ type SearchResponse = { domains: string[]; source: string; html: string; evidenc
 
 const FALLBACK_SEARX_INSTANCES = [
   "https://search.mectov.my.id/",
+  "https://searx.perennialte.ch/",
   "https://searxng.gr/",
   "https://search.mdosch.de/",
   "https://etsi.me/",
