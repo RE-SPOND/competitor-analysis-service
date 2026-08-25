@@ -56,3 +56,21 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(xlsx, /sheet name="Анализ"/);
   assert.match(xlsx, /autoFilter ref="A1:P/);
 });
+
+test("allows research to start with description only", async () => {
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  const route = await readFile(new URL("app/api/analyze/route.ts", projectRoot), "utf8");
+  const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
+
+  assert.match(page, /Ссылка на сайт компании/);
+  assert.match(page, /\(необязательно\)/);
+  assert.match(page, /description: "", region: "Россия"/);
+  assert.doesNotMatch(page, /<input required type="url"/);
+  assert.match(route, /if \(!input\.description\)/);
+  assert.match(route, /body\.region \|\| "Россия"/);
+  assert.match(analysis, /function descriptionOnlyClient/);
+  assert.match(analysis, /Исследуемый проект \(клиент\)/);
+  assert.match(analysis, /Сайт не указан/);
+  assert.match(analysis, /clientDomain\s*\?\s*analyzeDomain/);
+  assert.match(analysis, /region: input\.region\.trim\(\) \|\| "Россия"/);
+});

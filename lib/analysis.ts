@@ -155,18 +155,20 @@ function audiencePhrase(value: string): string {
   return patterns.map((pattern) => value.match(pattern)?.[0]).find(Boolean) || "";
 }
 
-async function projectSearchContext(input: AnalysisInput, clientDomain: string): Promise<{ text: string; brandStems: Set<string> }> {
+async function projectSearchContext(input: AnalysisInput, clientDomain = ""): Promise<{ text: string; brandStems: Set<string> }> {
   let html = "";
-  try {
-    html = await fetchText(`https://${clientDomain}/`, 8000);
-  } catch {
-    try { html = await fetchText(`https://r.jina.ai/https://${clientDomain}/`, 8000); } catch { /* The user's description remains the fallback. */ }
+  if (clientDomain) {
+    try {
+      html = await fetchText(`https://${clientDomain}/`, 8000);
+    } catch {
+      try { html = await fetchText(`https://r.jina.ai/https://${clientDomain}/`, 8000); } catch { /* The user's description remains the fallback. */ }
+    }
   }
   const title = titleFromHtml(html);
   const siteName = siteNameFromHtml(html);
   const siteContext = [title, metaDescriptionFromHtml(html), readerDescription(html)].filter(Boolean).join(" ");
   const identityFragments = [
-    brandNameFromDomain(clientDomain),
+    clientDomain ? brandNameFromDomain(clientDomain) : "",
     siteName,
     title.split(/[|–—-]/)[0],
     input.description.match(/^(.{2,60}?)\s+[—–-]\s+/u)?.[1] || "",
@@ -189,14 +191,14 @@ function makeQueries(input: AnalysisInput, clientDomain: string, context: string
   const base = compactSearchPhrase(context, brandStems);
   const categoryBase = base.split(" ").slice(0, 2).join(" ");
   const industryWord = base.split(" ")[0] || categoryBase;
-  const brand = brandNameFromDomain(clientDomain);
+  const brand = clientDomain ? brandNameFromDomain(clientDomain) : "";
   const audience = audiencePhrase(context);
   const isPhysicalProduct = /производ|издел|материал|оборудован|товар|магазин|доставк|монтаж|купить/i.test(context);
   const standard = [
     `${base} ${region}`,
     `${base} компании ${region}`,
     `${base} цены стоимость ${region}`,
-    `${brand} конкуренты аналоги`,
+    brand ? `${brand} конкуренты аналоги` : `${categoryBase} конкуренты аналоги ${region}`,
     audience ? `${categoryBase} ${audience} ${region}` : `${categoryBase} предложения ${region}`,
     isPhysicalProduct ? `${base} производители поставщики купить заказать ${region}` : `${base} сервисы услуги платформы ${region}`,
     `${categoryBase} конкуренты список игроков ${region}`,
@@ -718,18 +720,68 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   };
 }
 
+function descriptionOnlyClient(input: AnalysisInput): { row: AnalysisRow; sources: string[]; relevance: number } {
+  const description = input.description.trim();
+  const product = firstUsefulSentence(description, "Описание продукта не указано.");
+  const assortment = listFound(description, {
+    "консультац": "консультации", "подписк": "подписка", "отчет": "отчеты", "курс": "курсы", "вебинар": "вебинары",
+    "тест": "тесты", "дневник": "дневник", "чат": "чат", "приложен": "приложение", "психолог": "работа с психологом",
+    "доставк": "доставка", "монтаж": "монтаж", "проектирован": "проектирование", "производ": "производство",
+    "кредит": "кредитование", "вклад": "вклады", "банк": "банковские услуги", "страхован": "страхование",
+  }) || "Определяется по описанию проекта.";
+  const describedPrice = price(description);
+  const isDigitalService = findAny(description, ["онлайн", "сервис", "платформ", "приложен", "подписк", "консультац"]);
+  const custom = findAny(description, ["индивидуальн", "персональн", "по проекту", "подбор", "нестандарт", "под заказ", "эскиз"]);
+  return {
+    row: {
+      "Название": "Исследуемый проект (клиент)",
+      "Сайт": "Сайт не указан",
+      "Тип продукта": product,
+      "Ассортимент": assortment,
+      "УТП": "Определяется по описанию проекта.",
+      "Ценовой сегмент": describedPrice.startsWith("Цена на") ? "Цена в описании не указана." : describedPrice,
+      "География": input.region,
+      "Производство": isDigitalService ? "Не применимо: цифровой сервис или услуга" : "Не подтверждено: сайт не указан",
+      "Индивидуальные решения": custom ? "Да" : "Не указано",
+      "Каналы": "Не указано",
+      "Кейсы": "Не подтверждено: сайт не указан",
+      "Сильные стороны": "Требуется сравнение с найденными конкурентами.",
+      "Слабые стороны": "Недостаточно данных без сайта.",
+      "Особенности": `Клиент / эталон для сравнения. ${product}`,
+      "ОКВЭД": "Не подтверждено: сайт и юрданные не указаны.",
+      "Оборотка": "Не подтверждено: сайт и юрданные не указаны.",
+    },
+    sources: [],
+    relevance: 0,
+  };
+}
+
+function isClientDomain(domain: string, clientDomain: string): boolean {
+  return Boolean(clientDomain) && (domain === clientDomain || domain.endsWith(`.${clientDomain}`));
+}
+
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
   const startedAt = Date.now();
-  let normalizedUrl = input.projectUrl.trim();
-  if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
-  const clientDomain = normalizeDomain(normalizedUrl);
-  if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании.");
+  input = {
+    projectUrl: input.projectUrl.trim(),
+    description: input.description.trim(),
+    region: input.region.trim() || "Россия",
+  };
+  if (!input.description) throw new Error("Заполните описание компании или продукта.");
+  let normalizedUrl = input.projectUrl;
+  let clientDomain = "";
+  if (normalizedUrl) {
+    if (!/^https?:\/\//i.test(normalizedUrl)) normalizedUrl = `https://${normalizedUrl}`;
+    clientDomain = normalizeDomain(normalizedUrl);
+    if (!clientDomain || !clientDomain.includes(".")) throw new Error("Укажите корректную ссылку на сайт компании или оставьте поле пустым.");
+  }
+  input.projectUrl = normalizedUrl;
   const projectContext = await projectSearchContext(input, clientDomain);
   const queries = makeQueries(input, clientDomain, projectContext.text, projectContext.brandStems);
   const basePhrase = compactSearchPhrase(projectContext.text, projectContext.brandStems);
   const relevanceContext = input.description.trim() || projectContext.text;
-  const sources: string[] = [normalizedUrl, ...regulationSourceLinks(basePhrase, input.region)];
-  const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
+  const sources: string[] = [normalizedUrl, ...regulationSourceLinks(basePhrase, input.region)].filter(Boolean);
+  const clientDomainLabel = clientDomain ? clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "") : "";
   const isBankProject = /(?:^|\s)банк(?:\s|$)|банковск/iu.test(input.description);
 
   const counts = new Map<string, number>();
@@ -744,7 +796,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const verifiedIndustryNames = new Map(industryRegistryCandidates.map((candidate) => [registrableDomain(candidate.domain), candidate.name]));
   if (industryRegistryCandidates.length > 0) sources.push(BANK_REGISTRY_SOURCE);
   for (const candidate of industryRegistryCandidates) {
-    if (candidate.domain === clientDomain || candidate.domain.endsWith(`.${clientDomain}`)) continue;
+    if (isClientDomain(candidate.domain, clientDomain)) continue;
     counts.set(candidate.domain, Math.max(4, counts.get(candidate.domain) || 0));
     evidenceByDomain.set(candidate.domain, `${candidate.name}. Банк, действующая кредитная организация. Официальный сайт по данным Банка России.`);
   }
@@ -756,7 +808,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       for (const domain of result.domains) {
         const candidateLabel = domain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
         const repeatsClientBrand = clientDomainLabel.length >= 4 && candidateLabel.includes(clientDomainLabel);
-        if (domain !== clientDomain && !domain.endsWith(`.${clientDomain}`) && !repeatsClientBrand) {
+        if (!isClientDomain(domain, clientDomain) && !repeatsClientBrand) {
           counts.set(domain, (counts.get(domain) || 0) + 1);
           const evidence = result.evidence[domain];
           if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
@@ -772,7 +824,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
         sources.push(result.source);
         result.mapLeads.forEach((lead) => mapLeads.add(lead));
         for (const domain of result.domains) {
-          if (domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+          if (isClientDomain(domain, clientDomain)) continue;
           counts.set(domain, (counts.get(domain) || 0) + 1);
           const evidence = result.evidence[domain];
           if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
@@ -787,7 +839,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       if (settled.status !== "fulfilled") continue;
       sources.push(settled.value.source);
       for (const domain of settled.value.domains) {
-        if (domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+        if (isClientDomain(domain, clientDomain)) continue;
         counts.set(domain, (counts.get(domain) || 0) + 1);
         const evidence = settled.value.evidence[domain];
         if (evidence) evidenceByDomain.set(domain, `${evidenceByDomain.get(domain) || ""} ${evidence}`.trim());
@@ -809,7 +861,9 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     return verifiedIndustryDomains.has(registrableDomain(domain)) || !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
   });
   if (relevantCandidates.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по описаниям результатов.");
-  const clientPromise = analyzeDomain(clientDomain, input, true);
+  const clientPromise = clientDomain
+    ? analyzeDomain(clientDomain, input, true)
+    : Promise.resolve(descriptionOnlyClient(input));
   const checkedCandidates = (await mapWithConcurrency(relevantCandidates, isBankProject ? 32 : 16, async ([domain, mentions]) => {
     const registryDomain = registrableDomain(domain);
     const verified = verifiedIndustryDomains.has(registryDomain);
@@ -845,7 +899,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       sources.push(settled.value.source);
       for (const domain of settled.value.domains) {
         const base = registrableDomain(domain);
-        if (knownBases.has(base) || domain === clientDomain || domain.endsWith(`.${clientDomain}`)) continue;
+        if (knownBases.has(base) || isClientDomain(domain, clientDomain)) continue;
         if (domain.endsWith(".blog") && !/блог|медиа|журнал|издани/i.test(input.description)) continue;
         knownBases.add(base);
         newlyFound.set(domain, (newlyFound.get(domain) || 0) + 1);
