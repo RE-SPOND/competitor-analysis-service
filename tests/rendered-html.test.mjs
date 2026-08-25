@@ -42,6 +42,8 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(analysis, /cbr\.ru\/banking_sector\/credit\/cowebsites\//);
   assert.match(analysis, /bankRegistryCandidates/);
   assert.match(analysis, /verifiedIndustryDomains/);
+  assert.match(analysis, /transliterateDomainToken/);
+  assert.match(analysis, /industryRegistryCandidates\.length > 0 && !verifiedIndustryDomains\.has\(base\)/);
   assert.match(analysis, /Юрстатус подтверждён реестром Банка России/);
   assert.doesNotMatch(analysis, /Math\.max\(3, primaryMatches/);
   assert.match(analysis, /search\.brave\.com/);

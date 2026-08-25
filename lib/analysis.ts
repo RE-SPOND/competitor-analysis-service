@@ -212,15 +212,29 @@ type IndustryRegistryCandidate = { domain: string; name: string; source: string 
 
 const BANK_REGISTRY_SOURCE = "https://www.cbr.ru/banking_sector/credit/cowebsites/";
 
+function transliterateDomainToken(value: string): string {
+  const characters: Record<string, string> = {
+    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "i",
+    к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f",
+    х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+  };
+  return [...value.toLowerCase()].map((character) => characters[character] ?? character).join("").replace(/[^a-z0-9]/g, "");
+}
+
 function organizationDomainScore(domain: string, name: string): number {
-  const nameStems = searchWords(name)
-    .filter((word) => !/^(банк|пао|ао|ооо|кб|акб|рнко|нко)$/iu.test(word))
-    .map(wordStem);
+  const nameTokens = name.toLowerCase().match(/[a-zа-яё0-9]{2,}/giu) || [];
+  const identityTokens = nameTokens
+    .filter((word) => !/^(банк|пао|ао|ооо|кб|акб|каб|рнко|нко)$/iu.test(word))
+    .flatMap((word) => {
+      const transliterated = transliterateDomainToken(word);
+      return [transliterated, transliterated.replace(/kom/g, "com")];
+    })
+    .filter((word) => word.length >= 3);
   const label = domain.split(".")[0];
   let score = domain.endsWith(".ru") ? 8 : 0;
   if (domain.split(".").length === 2) score += 10;
   if (/bank|банк/iu.test(domain)) score += 12;
-  if (nameStems.some((stem) => label.includes(stem))) score += 14;
+  if (identityTokens.some((token) => label.includes(token) || token.includes(label))) score += 40;
   if (/^(?:app|lk|online|enter|chat|old|test|dev|research|events|card|credit|business)\./iu.test(domain)) score -= 20;
   return score - domain.length / 100;
 }
@@ -784,6 +798,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const candidates = [...counts.entries()].sort((a, b) => b[1] - a[1]).filter(([domain]) => {
     if (domain.endsWith(".blog") && !/блог|медиа|журнал|издани/i.test(input.description)) return false;
     const base = registrableDomain(domain);
+    if (industryRegistryCandidates.length > 0 && !verifiedIndustryDomains.has(base)) return false;
     if (seenDomains.has(base)) return false;
     seenDomains.add(base);
     return true;
