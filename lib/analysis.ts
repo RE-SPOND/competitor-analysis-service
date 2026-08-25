@@ -491,6 +491,8 @@ function capitalizeSentences(row: AnalysisRow): AnalysisRow {
 function findAny(text: string, words: string[]): boolean { const lower = text.toLowerCase(); return words.some((word) => lower.includes(word)); }
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
+const MIN_COMPETITOR_RELEVANCE = 6;
+
 function relevanceScore(primaryText: string, bodyText: string, description: string, searchEvidence = ""): number {
   const ignored = new Set([
     "онлайн", "сервис", "сервисы", "услуга", "услуги", "компания", "компании", "проект", "продукт", "работа",
@@ -527,7 +529,8 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   const industryRules = [
     { signal: /(?:^|\s)банк(?:\s|$)|банковск/iu, terms: /банк|банковск|bank/iu },
   ];
-  if (industryRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(primary))) return 0;
+  const matchingIndustry = industryRules.find((rule) => rule.signal.test(descriptionLower));
+  if (matchingIndustry && !matchingIndustry.terms.test(primary)) return 0;
   const candidateText = `${primary} ${body} ${evidence}`;
   const segmentRules = [
     { signal: /предприним|юридическ.{0,12}лиц|малого.{0,15}бизнес|среднего.{0,15}бизнес|\bb2b\b|корпоративн/, terms: /предприним|для бизнеса|бизнесу|юридическ|корпоративн|компани|организаци|\bb2b\b/ },
@@ -537,7 +540,9 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
   const primaryMatches = stems.filter((stem) => `${primary} ${evidence}`.includes(stem)).length;
   const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
-  return Math.max(3, primaryMatches * 3 + bodyMatches);
+  const categoryMatches = categoryStems.filter((stem) => candidateText.includes(stem)).length;
+  if (categoryStems.length >= 2 && categoryMatches < 2) return 0;
+  return primaryMatches * 3 + bodyMatches + (matchingIndustry ? 3 : 0);
 }
 
 function price(text: string): string {
@@ -725,7 +730,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     .flatMap((settled) => settled.status === "fulfilled" ? [settled.value] : []);
   const client = await clientPromise;
   let competitors = checkedCandidates
-    .filter((candidate) => candidate.relevance >= 3)
+    .filter((candidate) => candidate.relevance >= MIN_COMPETITOR_RELEVANCE)
     .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
 
@@ -758,7 +763,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     }
     if (newlyFound.size === 0) break;
     const expandedCandidates = (await mapWithConcurrency([...newlyFound.entries()], 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
-      .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= 3 ? [settled.value] : []);
+      .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= MIN_COMPETITOR_RELEVANCE ? [settled.value] : []);
     if (expandedCandidates.length === 0) break;
     competitors = [...competitors, ...expandedCandidates]
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
