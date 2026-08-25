@@ -35,6 +35,8 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(analysis, /groupsOnPage:\s*50/);
   assert.match(analysis, /MIN_COMPETITOR_RELEVANCE = 6/);
   assert.match(analysis, /const relevantCandidates = candidates\.filter/);
+  assert.match(analysis, /const relevanceContext = input\.description\.trim\(\) \|\| projectContext\.text/);
+  assert.match(analysis, /const expansionBase = basePhrase/);
   assert.doesNotMatch(analysis, /Math\.max\(3, primaryMatches/);
   assert.match(analysis, /search\.brave\.com/);
   assert.match(analysis, /html\.duckduckgo\.com/);

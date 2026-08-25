@@ -662,6 +662,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const projectContext = await projectSearchContext(input, clientDomain);
   const queries = makeQueries(input, clientDomain, projectContext.text, projectContext.brandStems);
   const basePhrase = compactSearchPhrase(projectContext.text, projectContext.brandStems);
+  const relevanceContext = input.description.trim() || projectContext.text;
   const sources: string[] = [normalizedUrl, ...regulationSourceLinks(basePhrase, input.region)];
   const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
 
@@ -727,11 +728,11 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const relevantCandidates = candidates.filter(([domain]) => {
     const evidence = evidenceByDomain.get(domain) || "";
-    return !evidence || relevanceScore(evidence, evidence, projectContext.text, evidence) >= MIN_COMPETITOR_RELEVANCE;
+    return !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
   });
   if (relevantCandidates.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по описаниям результатов.");
   const clientPromise = analyzeDomain(clientDomain, input, true);
-  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "")) })))
     .flatMap((settled) => settled.status === "fulfilled" ? [settled.value] : []);
   const client = await clientPromise;
   let competitors = checkedCandidates
@@ -741,8 +742,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
 
   const knownBases = new Set(candidates.map(([domain]) => registrableDomain(domain)));
   for (let round = 0; round < 2 && Date.now() - startedAt < 80000; round += 1) {
-    const expansionContext = competitors.map((candidate) => candidate.row["Тип продукта"]).join(" ");
-    const expansionBase = compactSearchPhrase(expansionContext);
+    const expansionBase = basePhrase;
     if (!expansionBase) break;
     const expansionQueries = [
       `${expansionBase} ${input.region}`,
@@ -769,9 +769,9 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     if (newlyFound.size === 0) break;
     const relevantNewEntries = [...newlyFound.entries()].filter(([domain]) => {
       const evidence = evidenceByDomain.get(domain) || "";
-      return !evidence || relevanceScore(evidence, evidence, projectContext.text, evidence) >= MIN_COMPETITOR_RELEVANCE;
+      return !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
     });
-    const expandedCandidates = (await mapWithConcurrency(relevantNewEntries, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+    const expandedCandidates = (await mapWithConcurrency(relevantNewEntries, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "")) })))
       .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= MIN_COMPETITOR_RELEVANCE ? [settled.value] : []);
     if (expandedCandidates.length === 0) break;
     competitors = [...competitors, ...expandedCandidates]
