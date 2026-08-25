@@ -725,8 +725,13 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     return true;
   });
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
+  const relevantCandidates = candidates.filter(([domain]) => {
+    const evidence = evidenceByDomain.get(domain) || "";
+    return !evidence || relevanceScore(evidence, evidence, projectContext.text, evidence) >= MIN_COMPETITOR_RELEVANCE;
+  });
+  if (relevantCandidates.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по описаниям результатов.");
   const clientPromise = analyzeDomain(clientDomain, input, true);
-  const checkedCandidates = (await mapWithConcurrency(candidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
     .flatMap((settled) => settled.status === "fulfilled" ? [settled.value] : []);
   const client = await clientPromise;
   let competitors = checkedCandidates
@@ -762,7 +767,11 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       }
     }
     if (newlyFound.size === 0) break;
-    const expandedCandidates = (await mapWithConcurrency([...newlyFound.entries()], 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
+    const relevantNewEntries = [...newlyFound.entries()].filter(([domain]) => {
+      const evidence = evidenceByDomain.get(domain) || "";
+      return !evidence || relevanceScore(evidence, evidence, projectContext.text, evidence) >= MIN_COMPETITOR_RELEVANCE;
+    });
+    const expandedCandidates = (await mapWithConcurrency(relevantNewEntries, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, projectContext.text, evidenceByDomain.get(domain) || "")) })))
       .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= MIN_COMPETITOR_RELEVANCE ? [settled.value] : []);
     if (expandedCandidates.length === 0) break;
     competitors = [...competitors, ...expandedCandidates]
