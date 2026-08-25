@@ -208,6 +208,110 @@ function makeQueries(input: AnalysisInput, clientDomain: string, context: string
 
 type SearchResponse = { domains: string[]; source: string; html: string; evidence: Record<string, string>; mapLeads: string[] };
 
+type YandexSearchCredentials = { apiKey: string; folderId: string };
+type YandexSearchPayload = { rawData?: string };
+
+const YANDEX_SEARCH_ENDPOINT = "https://searchapi.api.cloud.yandex.net/v2/web/search";
+let yandexSearchCredentialsCache: YandexSearchCredentials | null | undefined;
+
+async function yandexSearchCredentials(): Promise<YandexSearchCredentials | null> {
+  if (yandexSearchCredentialsCache !== undefined) return yandexSearchCredentialsCache;
+  let runtimeEnv: Record<string, unknown> = {};
+  try {
+    const runtime = await import("cloudflare:workers");
+    runtimeEnv = runtime.env as Record<string, unknown>;
+  } catch { /* Local tests can use process environment variables. */ }
+  const apiKey = String(runtimeEnv.YANDEX_SEARCH_API_KEY || process.env.YANDEX_SEARCH_API_KEY || "").trim();
+  const folderId = String(runtimeEnv.YANDEX_SEARCH_FOLDER_ID || process.env.YANDEX_SEARCH_FOLDER_ID || "").trim();
+  yandexSearchCredentialsCache = apiKey && folderId ? { apiKey, folderId } : null;
+  return yandexSearchCredentialsCache;
+}
+
+function decodeBase64Utf8(value: string): string {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function xmlValues(xml: string, tag: string): string[] {
+  return [...xml.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "giu"))]
+    .map((match) => decodeXmlText(match[1]))
+    .filter(Boolean);
+}
+
+async function searchYandexApi(query: string, page: number): Promise<SearchResponse> {
+  const credentials = await yandexSearchCredentials();
+  if (!credentials) throw new Error("Yandex Search API не настроен.");
+  const response = await fetch(YANDEX_SEARCH_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Authorization": `Api-Key ${credentials.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: {
+        searchType: "SEARCH_TYPE_RU",
+        queryText: query,
+        familyMode: "FAMILY_MODE_NONE",
+        fixTypoMode: "FIX_TYPO_MODE_ON",
+        page,
+      },
+      folderId: credentials.folderId,
+      groupSpec: {
+        groupMode: "GROUP_MODE_DEEP",
+        groupsOnPage: 50,
+        docsInGroup: 1,
+      },
+      l10n: "LOCALIZATION_RU",
+      region: "225",
+      responseFormat: "FORMAT_XML",
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Yandex Search API: HTTP ${response.status}`);
+  const payload = await response.json() as YandexSearchPayload;
+  if (!payload.rawData) throw new Error("Yandex Search API вернул пустой ответ.");
+  const xml = decodeBase64Utf8(payload.rawData);
+  const evidence: Record<string, string> = {};
+  const mapLeads: string[] = [];
+  const groups = [...xml.matchAll(/<group(?:\s[^>]*)?>([\s\S]*?)<\/group>/giu)].map((match) => match[1]);
+  for (const group of groups) {
+    const documentXml = group.match(/<doc(?:\s[^>]*)?>([\s\S]*?)<\/doc>/iu)?.[1] || group;
+    const resultUrl = xmlValues(documentXml, "url")[0];
+    if (!resultUrl) continue;
+    let rawDomain = "";
+    try { rawDomain = normalizeDomain(new URL(resultUrl).hostname); } catch { continue; }
+    const title = xmlValues(documentXml, "title")[0] || "";
+    if (rawDomain === "2gis.ru" || rawDomain.endsWith(".2gis.ru") || (rawDomain.endsWith("yandex.ru") && resultUrl.includes("/maps"))) {
+      const lead = mapLeadName(title);
+      if (lead.length >= 2 && !/^(2гис|яндекс карты|поиск|карта)$/iu.test(lead) && !mapLeads.includes(lead)) mapLeads.push(lead);
+      continue;
+    }
+    const domain = domainsFromUrls([resultUrl])[0];
+    if (!domain) continue;
+    const passages = xmlValues(documentXml, "passage").join(" ");
+    const headline = xmlValues(documentXml, "headline").join(" ");
+    evidence[domain] = `${evidence[domain] || ""} ${title} ${headline} ${passages}`.replace(/\s+/g, " ").trim();
+  }
+  const domains = Object.keys(evidence);
+  if (domains.length === 0 && mapLeads.length === 0) throw new Error("Yandex Search API не вернул сайты по запросу.");
+  const source = `https://yandex.ru/search/?text=${encodeURIComponent(query)}&p=${page}`;
+  return { domains, source, html: xml, evidence, mapLeads };
+}
+
 const FALLBACK_SEARX_INSTANCES = [
   "https://search.mectov.my.id/",
   "https://searx.perennialte.ch/",
@@ -311,6 +415,8 @@ async function searchDirectSources(sources: string[]): Promise<SearchResponse> {
 
 async function searchWeb(query: string, page = 0): Promise<SearchResponse> {
   let lastError: unknown;
+  try { return await searchYandexApi(query, page); }
+  catch (error) { lastError = error; }
   if (page < 2) {
     try {
       const instances = await availableSearxInstances();
@@ -326,6 +432,10 @@ async function searchWeb(query: string, page = 0): Promise<SearchResponse> {
 
 async function searchWebRescue(query: string): Promise<SearchResponse> {
   let lastError: unknown;
+  for (let page = 0; page < 3; page += 1) {
+    try { return await searchYandexApi(query, page); }
+    catch (error) { lastError = error; }
+  }
   const instances = await availableSearxInstances();
   for (const instance of instances.slice(0, 12)) {
     try { return await searchSearx(instance, query, 0); }

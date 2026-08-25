@@ -29,6 +29,10 @@ test("server-renders the competitor analysis login screen", async () => {
 test("uses open web search and keeps the final Excel columns", async () => {
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
   const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
+  assert.match(analysis, /searchapi\.api\.cloud\.yandex\.net\/v2\/web\/search/);
+  assert.match(analysis, /YANDEX_SEARCH_API_KEY/);
+  assert.match(analysis, /responseFormat:\s*"FORMAT_XML"/);
+  assert.match(analysis, /groupsOnPage:\s*50/);
   assert.match(analysis, /search\.brave\.com/);
   assert.match(analysis, /html\.duckduckgo\.com/);
   assert.match(analysis, /www\.bing\.com/);
