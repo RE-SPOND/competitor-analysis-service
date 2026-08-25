@@ -10,7 +10,8 @@ export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
   "yandex.ru", "ya.ru", "google.com", "bing.com", "duckduckgo.com", "brave.com", "jina.ai", "microsoft.com", "apple.com",
-  "youtube.com", "vk.com", "ok.ru", "dzen.ru", "rutube.ru", "t.me",
+  "youtube.com", "vk.com", "ok.ru", "dzen.ru", "rutube.ru", "t.me", "telegram.me", "twitter.com", "max.ru",
+  "linkedin.com", "instagram.com", "facebook.com",
   "2gis.ru", "checko.ru", "rusprofile.ru", "vc.ru", "t-j.ru", "wikipedia.org",
   "infoselection.ru", "habr.com", "dtf.ru", "medium.com", "reddit.com", "pikabu.ru", "mail.ru", "psymag.info",
   "rbc.ru", "rb.ru", "forbes.ru", "ria.ru", "smi2.ru", "sostav.ru", "cossa.ru", "adindex.ru",
@@ -207,6 +208,46 @@ function makeQueries(input: AnalysisInput, clientDomain: string, context: string
 }
 
 type SearchResponse = { domains: string[]; source: string; html: string; evidence: Record<string, string>; mapLeads: string[] };
+type IndustryRegistryCandidate = { domain: string; name: string; source: string };
+
+const BANK_REGISTRY_SOURCE = "https://www.cbr.ru/banking_sector/credit/cowebsites/";
+
+function organizationDomainScore(domain: string, name: string): number {
+  const nameStems = searchWords(name)
+    .filter((word) => !/^(банк|пао|ао|ооо|кб|акб|рнко|нко)$/iu.test(word))
+    .map(wordStem);
+  const label = domain.split(".")[0];
+  let score = domain.endsWith(".ru") ? 8 : 0;
+  if (domain.split(".").length === 2) score += 10;
+  if (/bank|банк/iu.test(domain)) score += 12;
+  if (nameStems.some((stem) => label.includes(stem))) score += 14;
+  if (/^(?:app|lk|online|enter|chat|old|test|dev|research|events|card|credit|business)\./iu.test(domain)) score -= 20;
+  return score - domain.length / 100;
+}
+
+function parseBankRegistry(html: string): IndustryRegistryCandidate[] {
+  const candidates: IndustryRegistryCandidate[] = [];
+  const seen = new Set<string>();
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/giu)].map((match) => match[1]);
+  for (const row of rows) {
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/giu)].map((match) => match[1]);
+    if (cells.length < 4) continue;
+    const name = pageText(cells[2]);
+    if (!/банк|(?:^|\s)(?:кб|акб|каб)(?:\s|$)/iu.test(name)) continue;
+    const urls = [...cells[3].matchAll(/href=["'](https?:\/\/[^"']+)["']/giu)].map((match) => match[1]);
+    const domains = [...new Set(domainsFromUrls(urls).map(registrableDomain))];
+    const domain = domains.sort((a, b) => organizationDomainScore(b, name) - organizationDomainScore(a, name))[0];
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+    candidates.push({ domain, name, source: BANK_REGISTRY_SOURCE });
+  }
+  return candidates;
+}
+
+async function bankRegistryCandidates(): Promise<IndustryRegistryCandidate[]> {
+  try { return parseBankRegistry(await fetchText(BANK_REGISTRY_SOURCE, 15000)); }
+  catch { return []; }
+}
 
 type YandexSearchCredentials = { apiKey: string; folderId: string };
 type YandexSearchPayload = { rawData?: string };
@@ -536,6 +577,8 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
     { signal: /(?:^|\s)банк(?:\s|$)|банковск/iu, terms: /банк|банковск|bank/iu },
   ];
   const matchingIndustry = industryRules.find((rule) => rule.signal.test(descriptionLower));
+  const bankAdjacent = /электронн.{0,24}(?:торг|площад)|торгов.{0,24}площад|закупк|тендер|бухгалтер|отч[её]тност|оператор электрон/iu;
+  if (matchingIndustry && bankAdjacent.test(primary) && !bankAdjacent.test(descriptionLower)) return 0;
   if (matchingIndustry && !matchingIndustry.terms.test(primary)) return 0;
   const candidateText = `${primary} ${body} ${evidence}`;
   const segmentRules = [
@@ -586,7 +629,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description, searchEvidence = ""): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description, searchEvidence = "", fastFetch = false): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -594,13 +637,13 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
   let siteName = "";
   let errorNote = "";
   try {
-    html = await fetchText(url);
+    html = await fetchText(url, fastFetch ? 7000 : 15000);
     text = pageText(html);
     siteName = siteNameFromHtml(html);
     title = titleFromHtml(html) || domain;
   } catch (directError) {
     try {
-      html = await fetchText(`https://r.jina.ai/https://${domain}/`, 8000);
+      html = await fetchText(`https://r.jina.ai/https://${domain}/`, fastFetch ? 4500 : 8000);
       text = pageText(html);
       title = html.match(/^Title:\s*(.+)$/mi)?.[1]?.trim() || domain;
     } catch {
@@ -673,12 +716,24 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const relevanceContext = input.description.trim() || projectContext.text;
   const sources: string[] = [normalizedUrl, ...regulationSourceLinks(basePhrase, input.region)];
   const clientDomainLabel = clientDomain.split(".")[0].replace(/[^a-zа-яё0-9]/giu, "");
+  const isBankProject = /(?:^|\s)банк(?:\s|$)|банковск/iu.test(input.description);
 
   const counts = new Map<string, number>();
   const evidenceByDomain = new Map<string, string>();
   const mapLeads = new Set<string>();
   const searchTasks = queries.flatMap((query) => [0, 1, 2].map((page) => ({ query, page })));
-  const searchResults = await mapWithConcurrency(searchTasks, 2, ({ query, page }) => searchWeb(query, page));
+  const [searchResults, industryRegistryCandidates] = await Promise.all([
+    mapWithConcurrency(searchTasks, 2, ({ query, page }) => searchWeb(query, page)),
+    isBankProject ? bankRegistryCandidates() : Promise.resolve([]),
+  ]);
+  const verifiedIndustryDomains = new Set(industryRegistryCandidates.map((candidate) => registrableDomain(candidate.domain)));
+  const verifiedIndustryNames = new Map(industryRegistryCandidates.map((candidate) => [registrableDomain(candidate.domain), candidate.name]));
+  if (industryRegistryCandidates.length > 0) sources.push(BANK_REGISTRY_SOURCE);
+  for (const candidate of industryRegistryCandidates) {
+    if (candidate.domain === clientDomain || candidate.domain.endsWith(`.${clientDomain}`)) continue;
+    counts.set(candidate.domain, Math.max(4, counts.get(candidate.domain) || 0));
+    evidenceByDomain.set(candidate.domain, `${candidate.name}. Банк, действующая кредитная организация. Официальный сайт по данным Банка России.`);
+  }
   for (const settled of searchResults) {
     if (settled.status === "fulfilled") {
       const result = settled.value;
@@ -736,11 +791,20 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (candidates.length === 0) throw new Error("Не удалось получить актуальную выдачу. Повторите запуск позже или проверьте доступность поисковых источников.");
   const relevantCandidates = candidates.filter(([domain]) => {
     const evidence = evidenceByDomain.get(domain) || "";
-    return !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
+    return verifiedIndustryDomains.has(registrableDomain(domain)) || !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
   });
   if (relevantCandidates.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по описаниям результатов.");
   const clientPromise = analyzeDomain(clientDomain, input, true);
-  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "")) })))
+  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, isBankProject ? 32 : 16, async ([domain, mentions]) => {
+    const registryDomain = registrableDomain(domain);
+    const verified = verifiedIndustryDomains.has(registryDomain);
+    const analyzed = await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "", verified);
+    if (verified) {
+      analyzed.relevance = Math.max(analyzed.relevance, MIN_COMPETITOR_RELEVANCE);
+      analyzed.row["Название"] = verifiedIndustryNames.get(registryDomain) || analyzed.row["Название"];
+    }
+    return { domain, mentions, ...analyzed };
+  }))
     .flatMap((settled) => settled.status === "fulfilled" ? [settled.value] : []);
   const client = await clientPromise;
   let competitors = checkedCandidates
@@ -749,7 +813,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
 
   const knownBases = new Set(candidates.map(([domain]) => registrableDomain(domain)));
-  for (let round = 0; round < 2 && Date.now() - startedAt < 80000; round += 1) {
+  for (let round = 0; round < 2 && industryRegistryCandidates.length === 0 && Date.now() - startedAt < 80000; round += 1) {
     const expansionBase = basePhrase;
     if (!expansionBase) break;
     const expansionQueries = [
@@ -786,7 +850,14 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   }
 
-  await mapWithConcurrency(competitors, 4, async (competitor) => {
+  await mapWithConcurrency(competitors, 8, async (competitor) => {
+    const registryDomain = registrableDomain(competitor.domain);
+    if (verifiedIndustryDomains.has(registryDomain)) {
+      competitor.row["ОКВЭД"] = "Юрстатус подтверждён реестром Банка России; код ОКВЭД требует отдельной проверки.";
+      competitor.row["Оборотка"] = "Не подтверждено: выручка не опубликована в реестре Банка России.";
+      competitor.sources.push(BANK_REGISTRY_SOURCE);
+      return;
+    }
     const legal = await legalLookup(competitor.domain);
     competitor.row["ОКВЭД"] = legal.okved;
     competitor.row["Оборотка"] = legal.turnover;
