@@ -519,6 +519,12 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   ];
   const descriptionLower = description.toLowerCase();
   const introductoryText = `${primary} ${body.slice(0, 800)}`;
+  const retailOrManufacturing = /интернет-?магазин|книжн.{0,18}магазин|издательств|купить.{0,35}книг|производител.{0,35}оборудован|оборудован.{0,35}производител/iu;
+  const mediaOrPublication = /(?:^|\s)сми(?:\s|$)|новост|журнал|статьи компании|дискуссионн.{0,45}пространств|информационн.{0,45}пространств/iu;
+  const businessOnly = /для (?:средн|крупн|мал).{0,18}компани|для бизнеса|бизнес-процесс|сотрудничеств.{0,25}исполнител|\bb2b\b/iu;
+  if (retailOrManufacturing.test(primary) && !retailOrManufacturing.test(descriptionLower)) return 0;
+  if (mediaOrPublication.test(primary) && !mediaOrPublication.test(descriptionLower)) return 0;
+  if (businessOnly.test(primary) && !businessOnly.test(descriptionLower)) return 0;
   if (informationalMarkers.some((marker) => primary.includes(marker) && !descriptionLower.includes(marker))) return 0;
   const strongInformationalMarkers = [
     "исследовательская компания", "исследования рынка", "отраслевая аналитика", "аналитический портал",
@@ -540,7 +546,9 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   if (segmentRules.some((rule) => rule.signal.test(descriptionLower) && !rule.terms.test(candidateText))) return 0;
   const primaryMatches = stems.filter((stem) => `${primary} ${evidence}`.includes(stem)).length;
   const bodyMatches = stems.filter((stem) => body.includes(stem)).length;
+  const primaryCategoryMatches = categoryStems.filter((stem) => primary.includes(stem)).length;
   const categoryMatches = categoryStems.filter((stem) => candidateText.includes(stem)).length;
+  if (categoryStems.length >= 2 && primaryCategoryMatches === 0) return 0;
   if (categoryStems.length >= 2 && categoryMatches < 2) return 0;
   return primaryMatches * 3 + bodyMatches + (matchingIndustry ? 3 : 0);
 }
