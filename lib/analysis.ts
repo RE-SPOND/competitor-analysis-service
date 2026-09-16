@@ -273,13 +273,8 @@ let yandexSearchCredentialsCache: YandexSearchCredentials | null | undefined;
 
 async function yandexSearchCredentials(): Promise<YandexSearchCredentials | null> {
   if (yandexSearchCredentialsCache !== undefined) return yandexSearchCredentialsCache;
-  let runtimeEnv: Record<string, unknown> = {};
-  try {
-    const runtime = await import("cloudflare:workers");
-    runtimeEnv = runtime.env as Record<string, unknown>;
-  } catch { /* Local tests can use process environment variables. */ }
-  const apiKey = String(runtimeEnv.YANDEX_SEARCH_API_KEY || process.env.YANDEX_SEARCH_API_KEY || "").trim();
-  const folderId = String(runtimeEnv.YANDEX_SEARCH_FOLDER_ID || process.env.YANDEX_SEARCH_FOLDER_ID || "").trim();
+  const apiKey = String(process.env.YANDEX_SEARCH_API_KEY || "").trim();
+  const folderId = String(process.env.YANDEX_SEARCH_FOLDER_ID || "").trim();
   yandexSearchCredentialsCache = apiKey && folderId ? { apiKey, folderId } : null;
   return yandexSearchCredentialsCache;
 }

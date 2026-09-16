@@ -7,12 +7,8 @@ const projectRoot = new URL("../", import.meta.url);
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
+  const { default: app } = await import(workerUrl.href);
+  return app(new Request("http://localhost/", { headers: { accept: "text/html" } }));
 }
 
 test("server-renders the competitor analysis login screen", async () => {

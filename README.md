@@ -61,9 +61,18 @@ npm run db:generate
 - `db/` and `drizzle/` contain the D1 schema and migration;
 - `tests/` contains build and behavior checks.
 
-## Deployment
+## Deployment to Vercel
 
-The application is prepared for deployment to a Cloudflare-compatible vinext environment. Configure a D1 binding named `DB` and add `YANDEX_SEARCH_API_KEY` and `YANDEX_SEARCH_FOLDER_ID` as deployment secrets. Never commit real API keys or local environment files.
+Import the GitHub repository in Vercel. The included `vercel.json` builds the
+vinext application and routes requests through a Vercel Function, so pushes to
+the production branch deploy automatically. Add `YANDEX_SEARCH_API_KEY` and
+`YANDEX_SEARCH_FOLDER_ID` in **Project Settings → Environment Variables** for
+Production, Preview, and Development. Never commit real API keys or local
+environment files.
+
+The analysis history falls back to process memory on Vercel. It is therefore
+cleared when a function instance is recycled; connect a persistent database
+before relying on the history as a production archive.
 
 ## Notes
 

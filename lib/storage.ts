@@ -8,10 +8,9 @@ const memory: StoredAnalysis[] = [];
 let schemaReady: Promise<void> | null = null;
 
 async function database(): Promise<Database | null> {
-  try {
-    const runtime = await import("cloudflare:workers");
-    return ((runtime.env as unknown as { DB?: Database }).DB) || null;
-  } catch { return null; }
+  // Vercel Functions do not expose Cloudflare D1 bindings. Until a persistent
+  // database adapter is configured, callers use the in-memory fallback below.
+  return null;
 }
 
 async function ensureSchema(): Promise<void> {
