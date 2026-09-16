@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 type AnalysisRow = Record<string, string>;
 type HistoryItem = { id: number; project_url: string; region: string; created_at: string; competitor_count: number };
 
-const columns = [
+const baseColumns = [
   "Название", "Сайт", "Тип продукта", "Ассортимент", "УТП", "Ценовой сегмент", "География", "Производство",
   "Индивидуальные решения", "Каналы", "Кейсы", "Сильные стороны", "Слабые стороны", "Особенности", "ОКВЭД", "Оборотка",
 ];
@@ -15,6 +15,7 @@ export default function Home() {
   const [login, setLogin] = useState({ username: "admin", password: "admin" });
   const [form, setForm] = useState({ projectUrl: "", description: "", region: "Россия" });
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [columns, setColumns] = useState<string[]>(baseColumns);
   const [rows, setRows] = useState<AnalysisRow[]>([]);
   const [sources, setSources] = useState<string[]>([]);
   const [status, setStatus] = useState("");
@@ -62,6 +63,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Не удалось выполнить анализ.");
       setRows(data.rows ?? []);
+      setColumns(Array.isArray(data.columns) && data.columns.length > 0 ? data.columns : baseColumns);
       setSources(data.sources ?? []);
       setStatus(`Готово: найдено и проверено ${data.rows?.length ?? 0} компаний. Excel можно скачать ниже.`);
       loadHistory();
@@ -77,7 +79,7 @@ export default function Home() {
       const response = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows, columns }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

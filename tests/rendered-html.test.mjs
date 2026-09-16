@@ -50,7 +50,7 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(analysis, /checko\.ru\/search\?query=/);
   assert.doesNotMatch(analysis, /clientDomain === "cfd-spb\.ru"/);
   assert.match(xlsx, /sheet name="Анализ"/);
-  assert.match(xlsx, /autoFilter ref="A1:P/);
+  assert.match(xlsx, /autoFilter ref="A1:\$\{columnName\(columns\.length - 1\)\}/);
 });
 
 test("allows research to start with description only", async () => {

@@ -4,8 +4,8 @@ export const COLUMNS = [
 ] as const;
 
 export type AnalysisInput = { projectUrl: string; description: string; region: string };
-export type AnalysisRow = Record<(typeof COLUMNS)[number], string>;
-export type AnalysisResult = { rows: AnalysisRow[]; sources: string[]; queries: string[]; generatedAt: string };
+export type AnalysisRow = Record<string, string>;
+export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; sources: string[]; queries: string[]; generatedAt: string };
 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
@@ -267,7 +267,18 @@ async function bankRegistryCandidates(): Promise<IndustryRegistryCandidate[]> {
 
 type YandexSearchCredentials = { apiKey: string; folderId: string };
 type YandexSearchPayload = { rawData?: string };
-type GrokRefinement = { rows?: Array<{ site?: string; product?: string; usp?: string; strengths?: string; weaknesses?: string; features?: string }> };
+type GrokRefinement = {
+  columns?: string[];
+  rows?: Array<{
+    site?: string;
+    product?: string;
+    usp?: string;
+    strengths?: string;
+    weaknesses?: string;
+    features?: string;
+    fields?: Record<string, string>;
+  }>;
+};
 
 const YANDEX_SEARCH_ENDPOINT = "https://searchapi.api.cloud.yandex.net/v2/web/search";
 let yandexSearchCredentialsCache: YandexSearchCredentials | null | undefined;
@@ -280,9 +291,25 @@ async function yandexSearchCredentials(): Promise<YandexSearchCredentials | null
   return yandexSearchCredentialsCache;
 }
 
-async function refineWithGrok(input: AnalysisInput, rows: AnalysisRow[]): Promise<AnalysisRow[]> {
+function fallbackDynamicColumns(description: string): string[] {
+  const lower = description.toLowerCase();
+  const columns: Array<[RegExp, string[]]> = [
+    [/размер|габарит|площад|2×2|3×3|3×4|4×6/u, ["Размеры", "Полезная площадь"]],
+    [/утепл|тёпл|терморежим|обогрев|вентиляц|климат/u, ["Климатическая версия", "Утепление и терморежим"]],
+    [/сборк|конструктор|diy|своими силами|инструкци/u, ["Самостоятельная сборка", "Время и сложность сборки"]],
+    [/стеллаж|ящик|полк|крюч|органайзер|хранен/u, ["Системы хранения"]],
+    [/фундамент|сва|блок|щеб/u, ["Фундамент и установка"]],
+    [/доставк|логистик|срок изготовлен/u, ["Срок изготовления и доставки"]],
+    [/гаранти|корроз|влаг|гниен|срок службы/u, ["Гарантия и долговечность"]],
+    [/маркетплейс|ozon|wildberries|авито|дилер|канал продаж/u, ["Каналы продаж"]],
+  ];
+  return columns.flatMap(([pattern, names]) => pattern.test(lower) ? names : []).slice(0, 8);
+}
+
+async function refineWithGrok(input: AnalysisInput, rows: AnalysisRow[]): Promise<{ columns: string[]; rows: AnalysisRow[] }> {
+  const fallbackColumns = fallbackDynamicColumns(input.description);
   const apiKey = String(process.env.XAI_API_KEY || "").trim();
-  if (!apiKey || rows.length === 0) return rows;
+  if (!apiKey || rows.length === 0) return { columns: fallbackColumns, rows };
   const candidates = rows.slice(0, 20).map((row) => ({
     site: row["Сайт"], product: row["Тип продукта"], assortment: row["Ассортимент"], usp: row["УТП"],
     price: row["Ценовой сегмент"], geography: row["География"], channels: row["Каналы"], cases: row["Кейсы"],
@@ -291,8 +318,9 @@ async function refineWithGrok(input: AnalysisInput, rows: AnalysisRow[]): Promis
   const prompt = [
     "Ты аналитик конкурентного рынка. Проверь карточки компаний по уже собранным фактам.",
     `Контекст исследования: ${input.description.slice(0, 2000)}. Регион: ${input.region}.`,
-    "Верни только JSON формата {\"rows\":[{\"site\":\"...\",\"product\":\"...\",\"usp\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"features\":\"...\"}]}",
-    "Включай строку лишь если уточнение основано на фактах в карточке. Не придумывай цены, клиентов, выручку, сертификаты или функциональность. Пиши кратко по-русски.",
+    "Сформируй до 8 дополнительных названий столбцов именно под параметры, явно запрошенные в описании проекта. Не повторяй базовые столбцы (название, сайт, УТП, цена, география, производство, каналы, кейсы).",
+    "Верни только JSON формата {\"columns\":[\"...\"],\"rows\":[{\"site\":\"...\",\"product\":\"...\",\"usp\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"features\":\"...\",\"fields\":{\"Название столбца\":\"значение или Не найдено\"}}]}",
+    "Включай строку лишь если уточнение основано на фактах в карточке. Не придумывай цены, размеры, характеристики, клиентов, выручку, сертификаты или функциональность. Пиши кратко по-русски; если факта нет — «Не найдено».",
     JSON.stringify(candidates),
   ].join("\n");
   try {
@@ -302,22 +330,27 @@ async function refineWithGrok(input: AnalysisInput, rows: AnalysisRow[]): Promis
       body: JSON.stringify({ model: "grok-4.6", temperature: 0.2, messages: [{ role: "user", content: prompt }] }),
       signal: AbortSignal.timeout(30000),
     });
-    if (!response.ok) return rows;
+    if (!response.ok) return { columns: fallbackColumns, rows };
     const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = payload.choices?.[0]?.message?.content?.trim();
     const json = content?.match(/\{[\s\S]*\}/)?.[0];
     const refinement = json ? JSON.parse(json) as GrokRefinement : null;
+    const columns = [...new Set((refinement?.columns || fallbackColumns)
+      .map((column) => String(column).trim())
+      .filter((column) => column.length >= 3 && column.length <= 60 && !COLUMNS.includes(column as typeof COLUMNS[number])))]
+      .slice(0, 8);
     const bySite = new Map((refinement?.rows || []).filter((item) => item.site).map((item) => [item.site!, item]));
-    return rows.map((row) => {
+    return { columns, rows: rows.map((row) => {
       const item = bySite.get(row["Сайт"]);
       return item ? {
         ...row,
         "Тип продукта": item.product || row["Тип продукта"], "УТП": item.usp || row["УТП"],
         "Сильные стороны": item.strengths || row["Сильные стороны"], "Слабые стороны": item.weaknesses || row["Слабые стороны"],
         "Особенности": item.features || row["Особенности"],
+        ...Object.fromEntries(columns.map((column) => [column, item.fields?.[column] || "Не найдено"])),
       } : row;
-    });
-  } catch { return rows; }
+    }) };
+  } catch { return { columns: fallbackColumns, rows }; }
 }
 
 function decodeBase64Utf8(value: string): string {
@@ -968,7 +1001,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     competitor.row["Оборотка"] = legal.turnover;
     if (legal.source) competitor.sources.push(legal.source);
   });
-  const rows = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
+  const refined = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
-  return { rows: rows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+  return { columns: [...COLUMNS, ...refined.columns], rows: refined.rows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
 }
