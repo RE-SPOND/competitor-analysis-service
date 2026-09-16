@@ -1,100 +1,70 @@
-# vinext-starter
+# Automated Competitor Analysis
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Web service for performing the complete competitor-analysis workflow from Technical Assignment 2. A user provides a company website (optional), a detailed product description, and a target region. The service searches current public web data, verifies industry relevance, analyzes the client and competitors, stores previous runs, and exports the result to Excel.
 
-## Prerequisites
+## Features
 
-- Node.js `>=22.13.0`
+- research from a website and description or from a description only;
+- competitor discovery through Yandex Search API and open web sources;
+- filtering of unrelated companies and duplicate domains;
+- collection of product, assortment, positioning, pricing, geography, channels, cases, strengths, and weaknesses;
+- additional bank-industry verification against the Bank of Russia registry;
+- saved analysis history in Cloudflare D1;
+- Excel export with the final comparison table and no technical worksheets;
+- test authentication with `admin / admin`.
 
-## Quick Start
+## Stack
+
+- TypeScript, React 19, vinext, and Vite;
+- Cloudflare Workers and D1;
+- Drizzle ORM;
+- Yandex Search API;
+- Node.js `>=22.13.0`.
+
+## Local Setup
 
 ```bash
 npm install
+```
+
+Create `.env.local` or `.dev.vars` and provide Yandex Search API credentials:
+
+```dotenv
+YANDEX_SEARCH_API_KEY=your_api_key
+YANDEX_SEARCH_FOLDER_ID=your_folder_id
+```
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+The interface uses the test credentials `admin / admin`.
+
+## Commands
+
+```bash
 npm run dev
 npm run build
+npm test
+npm run lint
+npm run db:generate
 ```
 
-This starter does not use `wrangler.jsonc`.
+## Project Structure
 
-## Included Shape
+- `app/` contains the interface and API routes;
+- `lib/analysis.ts` contains search, validation, and competitor-analysis logic;
+- `lib/xlsx.ts` builds the final Excel report;
+- `lib/storage.ts` stores and retrieves analysis history;
+- `db/` and `drizzle/` contain the D1 schema and migration;
+- `tests/` contains build and behavior checks.
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+## Deployment
 
-## Workspace Auth Headers
+The application is prepared for deployment to a Cloudflare-compatible vinext environment. Configure a D1 binding named `DB` and add `YANDEX_SEARCH_API_KEY` and `YANDEX_SEARCH_FOLDER_ID` as deployment secrets. Never commit real API keys or local environment files.
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
+## Notes
 
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Search coverage depends on the enabled search sources, API quotas, and the quality of the company description. The more specific the product, audience, geography, and business model are, the more accurate the competitor list will be.
