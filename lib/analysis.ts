@@ -267,6 +267,7 @@ async function bankRegistryCandidates(): Promise<IndustryRegistryCandidate[]> {
 
 type YandexSearchCredentials = { apiKey: string; folderId: string };
 type YandexSearchPayload = { rawData?: string };
+type GrokRefinement = { rows?: Array<{ site?: string; product?: string; usp?: string; strengths?: string; weaknesses?: string; features?: string }> };
 
 const YANDEX_SEARCH_ENDPOINT = "https://searchapi.api.cloud.yandex.net/v2/web/search";
 let yandexSearchCredentialsCache: YandexSearchCredentials | null | undefined;
@@ -277,6 +278,46 @@ async function yandexSearchCredentials(): Promise<YandexSearchCredentials | null
   const folderId = String(process.env.YANDEX_SEARCH_FOLDER_ID || "").trim();
   yandexSearchCredentialsCache = apiKey && folderId ? { apiKey, folderId } : null;
   return yandexSearchCredentialsCache;
+}
+
+async function refineWithGrok(input: AnalysisInput, rows: AnalysisRow[]): Promise<AnalysisRow[]> {
+  const apiKey = String(process.env.XAI_API_KEY || "").trim();
+  if (!apiKey || rows.length === 0) return rows;
+  const candidates = rows.slice(0, 20).map((row) => ({
+    site: row["Сайт"], product: row["Тип продукта"], assortment: row["Ассортимент"], usp: row["УТП"],
+    price: row["Ценовой сегмент"], geography: row["География"], channels: row["Каналы"], cases: row["Кейсы"],
+    strengths: row["Сильные стороны"], weaknesses: row["Слабые стороны"], features: row["Особенности"],
+  }));
+  const prompt = [
+    "Ты аналитик конкурентного рынка. Проверь карточки компаний по уже собранным фактам.",
+    `Контекст исследования: ${input.description.slice(0, 2000)}. Регион: ${input.region}.`,
+    "Верни только JSON формата {\"rows\":[{\"site\":\"...\",\"product\":\"...\",\"usp\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"features\":\"...\"}]}",
+    "Включай строку лишь если уточнение основано на фактах в карточке. Не придумывай цены, клиентов, выручку, сертификаты или функциональность. Пиши кратко по-русски.",
+    JSON.stringify(candidates),
+  ].join("\n");
+  try {
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "grok-4.6", temperature: 0.2, messages: [{ role: "user", content: prompt }] }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) return rows;
+    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const content = payload.choices?.[0]?.message?.content?.trim();
+    const json = content?.match(/\{[\s\S]*\}/)?.[0];
+    const refinement = json ? JSON.parse(json) as GrokRefinement : null;
+    const bySite = new Map((refinement?.rows || []).filter((item) => item.site).map((item) => [item.site!, item]));
+    return rows.map((row) => {
+      const item = bySite.get(row["Сайт"]);
+      return item ? {
+        ...row,
+        "Тип продукта": item.product || row["Тип продукта"], "УТП": item.usp || row["УТП"],
+        "Сильные стороны": item.strengths || row["Сильные стороны"], "Слабые стороны": item.weaknesses || row["Слабые стороны"],
+        "Особенности": item.features || row["Особенности"],
+      } : row;
+    });
+  } catch { return rows; }
 }
 
 function decodeBase64Utf8(value: string): string {
@@ -927,7 +968,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     competitor.row["Оборотка"] = legal.turnover;
     if (legal.source) competitor.sources.push(legal.source);
   });
-  const rows = [client.row, ...competitors.map((result) => result.row)].map(capitalizeSentences);
+  const rows = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
-  return { rows, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+  return { rows: rows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
 }

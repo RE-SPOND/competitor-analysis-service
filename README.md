@@ -32,6 +32,7 @@ Create `.env.local` or `.dev.vars` and provide Yandex Search API credentials:
 ```dotenv
 YANDEX_SEARCH_API_KEY=your_api_key
 YANDEX_SEARCH_FOLDER_ID=your_folder_id
+XAI_API_KEY=your_xai_api_key
 ```
 
 Start the development server:
@@ -65,9 +66,10 @@ npm run db:generate
 
 Import the GitHub repository in Vercel. The included `vercel.json` builds the
 vinext application and routes requests through a Vercel Function, so pushes to
-the production branch deploy automatically. Add `YANDEX_SEARCH_API_KEY` and
-`YANDEX_SEARCH_FOLDER_ID` in **Project Settings → Environment Variables** for
-Production, Preview, and Development. Never commit real API keys or local
+the production branch deploy automatically. Add `YANDEX_SEARCH_API_KEY`,
+`YANDEX_SEARCH_FOLDER_ID`, and `XAI_API_KEY` in **Project Settings → Environment
+Variables** for Production, Preview, and Development. Grok 4.6 refines
+source-backed competitor cards. Never commit real API keys or local
 environment files.
 
 The analysis history falls back to process memory on Vercel. It is therefore
