@@ -117,14 +117,16 @@ body { color: #1d2433; background: #f4f7ff; font-family: Inter, ui-sans-serif, s
 .clean-shell .topbar h1 { margin: 0 0 7px; font-size: 30px; line-height: 1.15; letter-spacing: -.035em; }
 .clean-shell .topbar p { max-width: 660px; font-size: 14px; line-height: 1.55; }
 .clean-shell .workspace-grid { margin-top: 0; }
-.clean-shell .workspace-grid.single-column { grid-template-columns: minmax(0, 900px); }
+.clean-shell .workspace-grid.single-column { grid-template-columns: minmax(0, 1fr); }
 .clean-shell .panel { border: 1px solid #e2e5ea; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(16, 24, 40, .025); }
 .clean-shell .form-panel { padding: 28px; }
 .clean-shell .form-panel h2 { margin-bottom: 5px; font-size: 20px; }
 .clean-shell .section-kicker { margin-bottom: 8px; color: #4f46e5; font-size: 10px; letter-spacing: .1em; }
-.clean-shell .form-two-columns { grid-template-columns: .85fr 1.15fr; gap: 16px; }
-.clean-shell .form-panel label { margin-top: 18px; color: #344054; font-size: 12px; font-weight: 650; }
-.clean-shell input, .clean-shell textarea { margin-top: 7px; border: 1px solid #d4d8e0; border-radius: 8px; padding: 11px 12px; background: #fff; font-size: 14px; }
+.clean-shell .form-two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.clean-shell .form-panel label { margin-top: 18px; color: #344054; font-size: 12px; font-weight: 650; line-height: 18px; }
+.clean-shell .form-two-columns .field-hint { display: inline; margin: 0 0 0 4px; line-height: inherit; }
+.clean-shell input, .clean-shell textarea { margin-top: 7px; border: 1px solid #d4d8e0; border-radius: 8px; padding: 11px 12px; background: #fff; font-size: 14px; line-height: 20px; }
+.clean-shell input { height: 44px; }
 .clean-shell textarea { min-height: 132px; }
 .clean-shell input:focus, .clean-shell textarea:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .11); }
 .clean-shell .field-hint { margin-top: 6px; font-size: 11px; }
@@ -138,8 +140,12 @@ body { color: #1d2433; background: #f4f7ff; font-family: Inter, ui-sans-serif, s
 .clean-shell .table-wrap th { background: #f8f9fb; color: #475467; }
 .clean-shell .summary-grid { gap: 28px; margin-top: 20px; }
 .clean-shell .history-search { border-radius: 8px; }
-.clean-shell .history-row { padding: 15px 0; }
+.clean-shell .history-row { grid-template-columns: 40px minmax(0, 1fr) auto; min-height: 64px; padding: 12px 0; }
 .clean-shell .history-icon { width: 34px; height: 34px; }
+.clean-shell .history-title { min-width: 0; line-height: 1.35; }
+.clean-shell .history-title b { vertical-align: baseline; }
+.clean-shell .history-title span, .clean-shell .history-title small { line-height: 17px; }
+.clean-shell .history-actions { align-items: center; }
 .clean-shell .show-table { border-radius: 8px; }
 .clean-shell .error, .clean-shell .status { border-radius: 8px; }
 .auth-shell { background: #f7f8fa; }
