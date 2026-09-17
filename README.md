@@ -9,7 +9,7 @@ Web service for performing the complete competitor-analysis workflow from Techni
 - filtering of unrelated companies and duplicate domains;
 - collection of product, assortment, positioning, pricing, geography, channels, cases, strengths, and weaknesses;
 - additional bank-industry verification against the Bank of Russia registry;
-- saved analysis history in Cloudflare D1;
+- saved analysis history in Upstash Redis (with a safe in-memory fallback locally);
 - Excel export with the final comparison table and no technical worksheets;
 - test authentication with `admin / admin`.
 
@@ -33,6 +33,8 @@ Create `.env.local` or `.dev.vars` and provide Yandex Search API credentials:
 YANDEX_SEARCH_API_KEY=your_api_key
 YANDEX_SEARCH_FOLDER_ID=your_folder_id
 XAI_API_KEY=your_xai_api_key
+UPSTASH_REDIS_REST_URL=https://your-database.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your_upstash_token
 ```
 
 Start the development server:
@@ -72,9 +74,12 @@ Variables** for Production, Preview, and Development. Grok 4.6 refines
 source-backed competitor cards. Never commit real API keys or local
 environment files.
 
-The analysis history falls back to process memory on Vercel. It is therefore
-cleared when a function instance is recycled; connect a persistent database
-before relying on the history as a production archive.
+For permanent history on Vercel, create an Upstash Redis database and add
+`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in **Project Settings → Environment
+Variables** for Production, Preview, and Development. The token is only read by
+server-side routes; never expose it in browser code or commit it. Without these
+variables, history falls back to process memory and can disappear when a function
+instance is recycled.
 
 ## Notes
 

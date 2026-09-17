@@ -1,58 +1,64 @@
 import type { AnalysisInput, AnalysisResult } from "./analysis";
 
-type StatementResult = { results?: Record<string, unknown>[]; meta?: { last_row_id?: number } };
-type Database = { prepare(sql: string): { bind(...values: unknown[]): { all<T = Record<string, unknown>>(): Promise<{ results: T[] }>; first<T = Record<string, unknown>>(): Promise<T | null>; run(): Promise<StatementResult> }; all<T = Record<string, unknown>>(): Promise<{ results: T[] }>; first<T = Record<string, unknown>>(): Promise<T | null>; run(): Promise<StatementResult> } };
-type StoredAnalysis = { id: number; input: AnalysisInput; result: AnalysisResult; created_at: string };
+export type StoredAnalysis = { id: string; input: AnalysisInput; result: AnalysisResult; created_at: string };
+type UpstashResponse<T> = { result?: T; error?: string };
 
 const memory: StoredAnalysis[] = [];
-let schemaReady: Promise<void> | null = null;
+const historyIndex = "competitor-analysis:history";
+const analysisKey = (id: string) => `competitor-analysis:analysis:${id}`;
 
-async function database(): Promise<Database | null> {
-  // Vercel Functions do not expose Cloudflare D1 bindings. Until a persistent
-  // database adapter is configured, callers use the in-memory fallback below.
-  return null;
+function upstashConfig() {
+  const url = process.env.UPSTASH_REDIS_REST_URL?.replace(/\/$/, "");
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  return url && token ? { url, token } : null;
 }
 
-async function ensureSchema(): Promise<void> {
-  const db = await database();
-  if (!db) return;
-  if (!schemaReady) {
-    schemaReady = db.prepare(`CREATE TABLE IF NOT EXISTS analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, project_url TEXT NOT NULL, description TEXT NOT NULL, region TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run().then(() => undefined);
-  }
-  await schemaReady;
+async function redis<T>(command: Array<string | number>): Promise<T> {
+  const config = upstashConfig();
+  if (!config) throw new Error("Upstash is not configured.");
+  const response = await fetch(config.url, { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" }, body: JSON.stringify(command), cache: "no-store" });
+  const payload = await response.json().catch(() => ({})) as UpstashResponse<T>;
+  if (!response.ok || payload.error) throw new Error(payload.error || "Upstash request failed.");
+  return payload.result as T;
 }
 
-export async function saveAnalysis(input: AnalysisInput, result: AnalysisResult): Promise<number> {
-  const createdAt = new Date().toISOString();
-  const db = await database();
-  if (!db) {
-    const id = (memory.at(-1)?.id || 0) + 1;
-    memory.push({ id, input, result, created_at: createdAt });
-    return id;
-  }
-  await ensureSchema();
-  const inserted = await db.prepare("INSERT INTO analyses (project_url, description, region, result_json, created_at) VALUES (?, ?, ?, ?, ?)").bind(input.projectUrl, input.description, input.region, JSON.stringify(result), createdAt).run();
-  return Number(inserted.meta?.last_row_id || 0);
+async function redisPipeline(commands: Array<Array<string | number>>): Promise<void> {
+  const config = upstashConfig();
+  if (!config) throw new Error("Upstash is not configured.");
+  const response = await fetch(`${config.url}/pipeline`, { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" }, body: JSON.stringify(commands), cache: "no-store" });
+  const payload = await response.json().catch(() => []) as Array<UpstashResponse<unknown>>;
+  if (!response.ok || !Array.isArray(payload) || payload.some((item) => item.error)) throw new Error(payload.find((item) => item.error)?.error || "Upstash request failed.");
 }
 
-export async function listAnalyses(): Promise<Array<{ id: number; project_url: string; region: string; created_at: string; competitor_count: number }>> {
-  const db = await database();
-  if (!db) return memory.slice().reverse().map((item) => ({ id: item.id, project_url: item.input.projectUrl, region: item.input.region, created_at: item.created_at, competitor_count: item.result.rows.length }));
-  await ensureSchema();
-  const result = await db.prepare("SELECT id, project_url, region, created_at, result_json FROM analyses ORDER BY id DESC LIMIT 30").all<{ id: number; project_url: string; region: string; created_at: string; result_json: string }>();
-  return result.results.map((item) => ({ id: item.id, project_url: item.project_url, region: item.region, created_at: item.created_at, competitor_count: JSON.parse(item.result_json).rows?.length || 0 }));
+function makeStoredAnalysis(input: AnalysisInput, result: AnalysisResult): StoredAnalysis {
+  return { id: crypto.randomUUID(), input, result, created_at: new Date().toISOString() };
 }
 
-export async function getAnalysis(id: number): Promise<StoredAnalysis | null> {
-  const db = await database();
-  if (!db) return memory.find((item) => item.id === id) || null;
-  await ensureSchema();
-  const item = await db.prepare("SELECT id, project_url, description, region, result_json, created_at FROM analyses WHERE id = ?").bind(id).first<{ id: number; project_url: string; description: string; region: string; result_json: string; created_at: string }>();
-  if (!item) return null;
-  return { id: item.id, input: { projectUrl: item.project_url, description: item.description, region: item.region }, result: JSON.parse(item.result_json) as AnalysisResult, created_at: item.created_at };
+export async function saveAnalysis(input: AnalysisInput, result: AnalysisResult): Promise<string> {
+  const stored = makeStoredAnalysis(input, result);
+  if (!upstashConfig()) { memory.push(stored); return stored.id; }
+  await redisPipeline([["SET", analysisKey(stored.id), JSON.stringify(stored)], ["ZADD", historyIndex, Date.now(), stored.id]]);
+  return stored.id;
+}
+
+export async function listAnalyses(): Promise<StoredAnalysis[]> {
+  if (!upstashConfig()) return memory.slice(-30).reverse();
+  const ids = await redis<string[]>(["ZREVRANGE", historyIndex, 0, 29]);
+  if (!ids.length) return [];
+  const values = await redis<Array<string | null>>(["MGET", ...ids]);
+  return values.flatMap((value) => {
+    if (!value) return [];
+    try { return [JSON.parse(value) as StoredAnalysis]; } catch { return []; }
+  });
+}
+
+export async function getAnalysis(id: string): Promise<StoredAnalysis | null> {
+  if (!upstashConfig()) return memory.find((item) => item.id === id) || null;
+  const value = await redis<string | null>(["GET", analysisKey(id)]);
+  if (!value) return null;
+  try { return JSON.parse(value) as StoredAnalysis; } catch { return null; }
 }
 
 export async function latestAnalysis(): Promise<StoredAnalysis | null> {
-  const items = await listAnalyses();
-  return items[0] ? getAnalysis(items[0].id) : null;
+  return (await listAnalyses())[0] || null;
 }
