@@ -5,7 +5,19 @@ export const COLUMNS = [
 
 export type AnalysisInput = { projectUrl: string; description: string; region: string };
 export type AnalysisRow = Record<string, string>;
-export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; sources: string[]; queries: string[]; generatedAt: string };
+export type MarketLeader = { name: string; site: string; score: number; reasons: string[] };
+export type MarketItem = { name: string; competitors: number; coverage: number };
+export type MarketSummary = {
+  leaders: MarketLeader[];
+  services: MarketItem[];
+  coverage: MarketItem[];
+  price: { transparent: number; total: number; note: string };
+  gaps: string[];
+  recommendations: string[];
+  risks: string[];
+  methodology: string;
+};
+export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string };
 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
@@ -829,6 +841,65 @@ function isClientDomain(domain: string, clientDomain: string): boolean {
   return Boolean(clientDomain) && (domain === clientDomain || domain.endsWith(`.${clientDomain}`));
 }
 
+function hasFact(value: string | undefined): boolean {
+  const normalized = (value || "").trim().toLowerCase();
+  return Boolean(normalized) && !/^(не найдено|не указано|не подтверждено|—|цена на сайте не указана)/u.test(normalized);
+}
+
+function buildMarketSummary(rows: AnalysisRow[], columns: string[]): MarketSummary {
+  const competitors = rows.filter((row) => !row["Название"].includes("(клиент)"));
+  const total = competitors.length || 1;
+  const serviceRules: Array<[string, RegExp]> = [
+    ["Доставка", /доставк/u], ["Монтаж и сборка", /монтаж|сборк/u], ["Индивидуальная комплектация", /индивидуальн|под заказ|кастом|нестандарт/u],
+    ["Собственное производство", /собственн.{0,25}производ|производим|изготавливаем/u], ["Утепление и климат", /утепл|тёпл|терморежим|обогрев|вентиляц/u],
+    ["Системы хранения", /стеллаж|полк|ящик|крюч|органайзер/u], ["Фундамент и установка", /фундамент|сва|блок|щеб/u],
+    ["Гарантия", /гарант/u], ["Электрика и освещение", /электрик|освещен/u],
+  ];
+  const services = serviceRules.map(([name, pattern]) => ({
+    name,
+    competitors: competitors.filter((row) => pattern.test(Object.values(row).join(" "))).length,
+    coverage: 0,
+  })).filter((item) => item.competitors > 0).map((item) => ({ ...item, coverage: Math.round(item.competitors / total * 100) }));
+  const coverage = columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number])).map((name) => {
+    const count = competitors.filter((row) => hasFact(row[name])).length;
+    return { name, competitors: count, coverage: Math.round(count / total * 100) };
+  }).filter((item) => item.competitors > 0).sort((a, b) => b.coverage - a.coverage);
+  const leaders = competitors.map((row) => {
+    const reasons: string[] = [];
+    let score = 0;
+    if (hasFact(row["Ценовой сегмент"])) { score += 20; reasons.push("опубликована цена"); }
+    if (row["Производство"] === "Да") { score += 20; reasons.push("подтверждено производство"); }
+    if (row["Индивидуальные решения"] === "Да") { score += 15; reasons.push("есть индивидуальные решения"); }
+    if (/^Да/u.test(row["Кейсы"] || "")) { score += 15; reasons.push("есть кейсы или отзывы"); }
+    if ((row["Каналы"] || "").split(",").length >= 3) { score += 10; reasons.push("несколько каналов связи"); }
+    for (const column of coverage.map((item) => item.name)) if (hasFact(row[column])) score += 4;
+    return { name: row["Название"], site: row["Сайт"], score, reasons };
+  }).sort((a, b) => b.score - a.score).slice(0, 5);
+  const transparent = competitors.filter((row) => hasFact(row["Ценовой сегмент"])).length;
+  const lowCoverage = [...coverage, ...services].filter((item) => item.coverage > 0 && item.coverage < 35).slice(0, 4);
+  const gaps = lowCoverage.length
+    ? lowCoverage.map((item) => `Низкое покрытие «${item.name}»: подтверждено у ${item.competitors} из ${total} конкурентов.`)
+    : ["Явные пробелы требуют дополнительной проверки: доступные страницы конкурентов содержат схожий набор параметров."];
+  const recommendations = [
+    "Сделайте ключевые параметры и цену доступными на карточке товара — это повышает прозрачность предложения.",
+    ...lowCoverage.slice(0, 2).map((item) => `Проверьте гипотезу дифференциации через «${item.name}»: предложение встречается редко.`),
+  ];
+  const risks = [
+    "Данные основаны на открытых страницах и могут не включать закрытые прайс-листы или индивидуальные условия.",
+    transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
+  ];
+  return {
+    leaders,
+    services: services.sort((a, b) => b.coverage - a.coverage),
+    coverage,
+    price: { transparent, total, note: `Цена подтверждена у ${transparent} из ${total} конкурентов.` },
+    gaps,
+    recommendations,
+    risks,
+    methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам: цена, производство, индивидуальные решения, кейсы, каналы связи и дополнительные параметры. Это не оценка выручки или доли рынка.",
+  };
+}
+
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
   const startedAt = Date.now();
   input = {
@@ -1003,5 +1074,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   });
   const refined = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
-  return { columns: [...COLUMNS, ...refined.columns], rows: refined.rows.map(capitalizeSentences), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+  const columns = [...COLUMNS, ...refined.columns];
+  const normalizedRows = refined.rows.map(capitalizeSentences);
+  return { columns, rows: normalizedRows, summary: buildMarketSummary(normalizedRows, columns), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
 }

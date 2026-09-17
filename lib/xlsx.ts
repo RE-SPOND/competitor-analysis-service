@@ -1,4 +1,4 @@
-import { COLUMNS, type AnalysisRow } from "./analysis";
+import { COLUMNS, type AnalysisRow, type MarketSummary } from "./analysis";
 
 const encoder = new TextEncoder();
 
@@ -23,6 +23,19 @@ function sheetXml(rows: AnalysisRow[], columns: string[]): string {
   const body = rows.map((row, rowIndex) => `<row r="${rowIndex + 2}">${columns.map((column, columnIndex) => inlineCell(`${columnName(columnIndex)}${rowIndex + 2}`, row[column])).join("")}</row>`).join("");
   const widths = columns.map((_, index) => `<col min="${index + 1}" max="${index + 1}" width="24" customWidth="1"/>`).join("");
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${widths}</cols><sheetData><row r="1">${headers}</row>${body}</sheetData><autoFilter ref="A1:${columnName(columns.length - 1)}${rows.length + 1}"/><freezePanes><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></freezePanes></worksheet>`;
+}
+
+function summaryRows(summary: MarketSummary): AnalysisRow[] {
+  const rows: AnalysisRow[] = [];
+  for (const leader of summary.leaders) rows.push({ "Раздел": "Лидеры", "Показатель": leader.name, "Значение": `${leader.score} баллов: ${leader.reasons.join(", ") || "подтверждённые факты"}` });
+  for (const item of summary.services) rows.push({ "Раздел": "Услуги и опции", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
+  for (const item of summary.coverage) rows.push({ "Раздел": "Покрытие параметров", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
+  rows.push({ "Раздел": "Цены", "Показатель": "Прозрачность", "Значение": summary.price.note });
+  for (const item of summary.gaps) rows.push({ "Раздел": "Пробелы рынка", "Показатель": "Возможность", "Значение": item });
+  for (const item of summary.recommendations) rows.push({ "Раздел": "Рекомендации", "Показатель": "Действие", "Значение": item });
+  for (const item of summary.risks) rows.push({ "Раздел": "Ограничения", "Показатель": "Риск", "Значение": item });
+  rows.push({ "Раздел": "Методика", "Показатель": "Как рассчитано", "Значение": summary.methodology });
+  return rows;
 }
 
 function crc32(bytes: Uint8Array): number {
@@ -50,14 +63,17 @@ function zip(files: Array<[string, string]>): Uint8Array {
   return concat([localBytes, centralBytes, u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(centralBytes.length), u32(localBytes.length), u16(0)]);
 }
 
-export function buildXlsx(rows: AnalysisRow[], columns: string[] = [...COLUMNS]): Uint8Array {
+export function buildXlsx(rows: AnalysisRow[], columns: string[] = [...COLUMNS], summary?: MarketSummary): Uint8Array {
+  const hasSummary = Boolean(summary);
+  const summaryColumns = ["Раздел", "Показатель", "Значение"];
   const files: Array<[string, string]> = [
-    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>${hasSummary ? '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' : ""}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
     ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
-    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Анализ" sheetId="1" r:id="rId1"/></sheets></workbook>`],
-    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Анализ" sheetId="1" r:id="rId1"/>${hasSummary ? '<sheet name="Выводы" sheetId="2" r:id="rId2"/>' : ""}</sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>${hasSummary ? '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' : ""}<Relationship Id="rId${hasSummary ? 3 : 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
     ["xl/styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0C4638"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>`],
     ["xl/worksheets/sheet1.xml", sheetXml(rows, columns)],
+    ...(summary ? [["xl/worksheets/sheet2.xml", sheetXml(summaryRows(summary), summaryColumns)] as [string, string]] : []),
   ];
   return zip(files);
 }

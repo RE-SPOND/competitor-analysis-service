@@ -1,11 +1,11 @@
 import { isAuthenticated, unauthorized } from "../_auth";
-import { COLUMNS, type AnalysisRow } from "../../../lib/analysis";
+import { COLUMNS, type AnalysisRow, type MarketSummary } from "../../../lib/analysis";
 import { buildXlsx } from "../../../lib/xlsx";
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
 
-  const body = await request.json().catch(() => null) as { rows?: unknown; columns?: unknown } | null;
+  const body = await request.json().catch(() => null) as { rows?: unknown; columns?: unknown; summary?: MarketSummary } | null;
   if (!Array.isArray(body?.rows) || body.rows.length === 0) {
     return Response.json({ error: "Нет данных для выгрузки." }, { status: 400 });
   }
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const source = row && typeof row === "object" ? row as Record<string, unknown> : {};
     return Object.fromEntries(columns.map((column) => [column, String(source[column] ?? "")])) as AnalysisRow;
   });
-  const file = buildXlsx(rows, columns);
+  const file = buildXlsx(rows, columns, body.summary);
   return new Response(file as unknown as BodyInit, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
