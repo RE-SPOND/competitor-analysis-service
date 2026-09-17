@@ -59,6 +59,19 @@ export async function getAnalysis(id: string): Promise<StoredAnalysis | null> {
   try { return JSON.parse(value) as StoredAnalysis; } catch { return null; }
 }
 
+export async function renameAnalysis(id: string, title: string): Promise<StoredAnalysis | null> {
+  const analysis = await getAnalysis(id);
+  if (!analysis) return null;
+  const updated = { ...analysis, input: { ...analysis.input, title } };
+  if (!upstashConfig()) {
+    const index = memory.findIndex((item) => item.id === id);
+    if (index >= 0) memory[index] = updated;
+    return updated;
+  }
+  await redisPipeline([["SET", analysisKey(id), JSON.stringify(updated)]]);
+  return updated;
+}
+
 export async function latestAnalysis(): Promise<StoredAnalysis | null> {
   return (await listAnalyses())[0] || null;
 }
