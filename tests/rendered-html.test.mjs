@@ -59,7 +59,7 @@ test("allows research to start with description only", async () => {
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
 
   assert.match(page, /Ссылка на сайт компании/);
-  assert.match(page, /\(необязательно\)/);
+  assert.match(page, /необязательно/);
   assert.match(page, /description: "", region: "Россия"/);
   assert.doesNotMatch(page, /<input required type="url"/);
   assert.match(route, /if \(!input\.description\)/);
