@@ -8,10 +8,12 @@ export async function POST(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
   const body = await request.json().catch(() => ({})) as Partial<AnalysisInput>;
   const input: AnalysisInput = {
+    title: String(body.title || "").trim(),
     projectUrl: String(body.projectUrl || "").trim(),
     description: String(body.description || "").trim(),
     region: String(body.region || "Россия").trim() || "Россия",
   };
+  if (!input.title) return Response.json({ error: "Добавьте название анализа, чтобы его было легко найти в истории." }, { status: 400 });
   if (!input.description) return Response.json({ error: "Заполните описание компании или продукта." }, { status: 400 });
   try {
     const result = await analyzeProject(input);

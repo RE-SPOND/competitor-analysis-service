@@ -3,7 +3,7 @@ export const COLUMNS = [
   "Индивидуальные решения", "Каналы", "Кейсы", "Сильные стороны", "Слабые стороны", "Особенности", "ОКВЭД", "Оборотка",
 ] as const;
 
-export type AnalysisInput = { projectUrl: string; description: string; region: string };
+export type AnalysisInput = { title: string; projectUrl: string; description: string; region: string };
 export type AnalysisRow = Record<string, string>;
 export type MarketLeader = { name: string; site: string; score: number; reasons: string[] };
 export type MarketItem = { name: string; competitors: number; coverage: number };
@@ -903,6 +903,7 @@ function buildMarketSummary(rows: AnalysisRow[], columns: string[]): MarketSumma
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
   const startedAt = Date.now();
   input = {
+    title: input.title.trim(),
     projectUrl: input.projectUrl.trim(),
     description: input.description.trim(),
     region: input.region.trim() || "Россия",

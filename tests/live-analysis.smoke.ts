@@ -1,6 +1,7 @@
 import { analyzeProject } from "../lib/analysis";
 
 const result = await analyzeProject({
+  title: "Smoke test",
   projectUrl: "https://insightlogia.ru",
   description: "Сервис психологической самопомощи, подписка, онлайн-консультации и отчеты",
   region: "Москва",
