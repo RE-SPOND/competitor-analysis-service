@@ -52,6 +52,20 @@ export async function listAnalyses(): Promise<StoredAnalysis[]> {
   });
 }
 
+export async function listAllAnalyses(): Promise<StoredAnalysis[]> {
+  if (!upstashConfig()) return memory.slice().reverse();
+  const ids = await redis<string[]>(["ZREVRANGE", historyIndex, 0, -1]);
+  const items: StoredAnalysis[] = [];
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const values = await redis<Array<string | null>>(["MGET", ...ids.slice(offset, offset + 100)]);
+    for (const value of values) {
+      if (!value) continue;
+      try { items.push(JSON.parse(value) as StoredAnalysis); } catch { /* Ignore malformed archived records. */ }
+    }
+  }
+  return items;
+}
+
 export async function getAnalysis(id: string): Promise<StoredAnalysis | null> {
   if (!upstashConfig()) return memory.find((item) => item.id === id) || null;
   const value = await redis<string | null>(["GET", analysisKey(id)]);
@@ -63,6 +77,19 @@ export async function renameAnalysis(id: string, title: string): Promise<StoredA
   const analysis = await getAnalysis(id);
   if (!analysis) return null;
   const updated = { ...analysis, input: { ...analysis.input, title } };
+  if (!upstashConfig()) {
+    const index = memory.findIndex((item) => item.id === id);
+    if (index >= 0) memory[index] = updated;
+    return updated;
+  }
+  await redisPipeline([["SET", analysisKey(id), JSON.stringify(updated)]]);
+  return updated;
+}
+
+export async function updateAnalysisResult(id: string, result: AnalysisResult): Promise<StoredAnalysis | null> {
+  const analysis = await getAnalysis(id);
+  if (!analysis) return null;
+  const updated = { ...analysis, result };
   if (!upstashConfig()) {
     const index = memory.findIndex((item) => item.id === id);
     if (index >= 0) memory[index] = updated;

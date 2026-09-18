@@ -28,7 +28,15 @@ function sheetXml(rows: AnalysisRow[], columns: string[]): string {
 function summaryRows(summary: MarketSummary): AnalysisRow[] {
   const rows: AnalysisRow[] = [];
   for (const leader of summary.leaders) rows.push({ "Раздел": "Лидеры", "Показатель": leader.name, "Значение": `${leader.score} баллов: ${leader.reasons.join(", ") || "подтверждённые факты"}` });
-  for (const item of summary.services) rows.push({ "Раздел": "Услуги и опции", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
+  if (summary.serviceCatalog?.length) {
+    for (const item of summary.serviceCatalog) rows.push({
+      "Раздел": `SEO-каталог · ${item.cluster}`,
+      "Показатель": item.name,
+      "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%) · Страница: ${item.suggestedPage} · Конкуренты: ${item.competitorsList.join(", ")} · Поля-источники: ${item.sourceFields.join(", ")}`,
+    });
+  } else {
+    for (const item of summary.services) rows.push({ "Раздел": "Услуги и опции", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
+  }
   for (const item of summary.coverage) rows.push({ "Раздел": "Покрытие параметров", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
   rows.push({ "Раздел": "Цены", "Показатель": "Прозрачность", "Значение": summary.price.note });
   for (const item of summary.gaps) rows.push({ "Раздел": "Пробелы рынка", "Показатель": "Возможность", "Значение": item });

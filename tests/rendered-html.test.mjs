@@ -70,3 +70,19 @@ test("allows research to start with description only", async () => {
   assert.match(analysis, /clientDomain\s*\?\s*analyzeDomain/);
   assert.match(analysis, /region: input\.region\.trim\(\) \|\| "Россия"/);
 });
+
+test("builds a complete SEO service catalog and can rebuild saved analyses", async () => {
+  const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
+  const rebuild = await readFile(new URL("app/api/history/rebuild/route.ts", projectRoot), "utf8");
+
+  assert.match(analysis, /export type ServiceCatalogItem/);
+  assert.match(analysis, /function buildServiceCatalog/);
+  assert.match(analysis, /competitorsList/);
+  assert.match(analysis, /suggestedPage/);
+  assert.match(page, /Полный каталог услуг для SEO-структуры/);
+  assert.match(xlsx, /SEO-каталог/);
+  assert.match(rebuild, /listAllAnalyses/);
+  assert.match(rebuild, /updateAnalysisResult/);
+});
