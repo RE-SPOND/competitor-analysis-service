@@ -82,10 +82,14 @@ test("builds a complete SEO service catalog and can rebuild saved analyses", asy
   assert.match(analysis, /competitorsList/);
   assert.match(analysis, /suggestedPage/);
   assert.match(page, /Услуги конкурентов для SEO-структуры/);
+  assert.match(page, /summary\.serviceCatalog\.slice\(0, 5\)/);
+  assert.match(page, /Свернуть до 5 услуг/);
+  assert.match(page, /Показать ещё \$\{summary\.serviceCatalog\.length - 5\} услуг/);
   assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
   assert.match(analysis, /только по названиям, найденным в разделах «Услуги»/);
   assert.match(analysis, /serviceCatalogVersion: 3/);
   assert.match(xlsx, /SEO-каталог/);
+  assert.match(xlsx, /for \(const item of summary\.serviceCatalog\)/);
   assert.match(rebuild, /listAllAnalyses/);
   assert.match(rebuild, /updateAnalysisResult/);
 });
