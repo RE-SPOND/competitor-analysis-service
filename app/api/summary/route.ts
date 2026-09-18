@@ -1,5 +1,5 @@
-import { isAuthenticated, unauthorized } from "../../_auth";
-import { buildMarketSummary, type AnalysisRow } from "../../../../lib/analysis";
+import { isAuthenticated, unauthorized } from "../_auth";
+import { buildMarketSummary, type AnalysisRow } from "../../../lib/analysis";
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();

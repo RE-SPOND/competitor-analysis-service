@@ -75,7 +75,7 @@ test("builds a complete SEO service catalog and can rebuild saved analyses", asy
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
   const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
   const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
-  const rebuild = await readFile(new URL("app/api/history/rebuild/route.ts", projectRoot), "utf8");
+  const rebuild = await readFile(new URL("app/api/rebuild/route.ts", projectRoot), "utf8");
 
   assert.match(analysis, /export type ServiceCatalogItem/);
   assert.match(analysis, /function buildServiceCatalog/);

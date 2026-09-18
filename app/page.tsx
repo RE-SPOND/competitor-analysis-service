@@ -60,7 +60,7 @@ export default function Home() {
       const enriched = await Promise.all(combined.map(async (item) => {
         if (Array.isArray(item.summary?.serviceCatalog)) return item;
         try {
-          const response = await fetch("/api/analysis/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: item.rows, columns: item.columns }) });
+          const response = await fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: item.rows, columns: item.columns }) });
           const data = await response.json();
           return response.ok && data.summary ? { ...item, summary: data.summary as MarketSummary } : item;
         } catch { return item; }

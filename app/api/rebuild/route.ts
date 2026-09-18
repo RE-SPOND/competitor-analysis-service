@@ -1,6 +1,6 @@
-import { isAuthenticated, unauthorized } from "../../_auth";
-import { buildMarketSummary } from "../../../../lib/analysis";
-import { listAllAnalyses, updateAnalysisResult } from "../../../../lib/storage";
+import { isAuthenticated, unauthorized } from "../_auth";
+import { buildMarketSummary } from "../../../lib/analysis";
+import { listAllAnalyses, updateAnalysisResult } from "../../../lib/storage";
 
 export const maxDuration = 120;
 
