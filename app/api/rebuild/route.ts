@@ -1,5 +1,5 @@
 import { isAuthenticated, unauthorized } from "../_auth";
-import { buildMarketSummary } from "../../../lib/analysis";
+import { refreshServicesInResult } from "../../../lib/analysis";
 import { listAllAnalyses, updateAnalysisResult } from "../../../lib/storage";
 
 export const maxDuration = 120;
@@ -9,8 +9,8 @@ export async function POST(request: Request) {
   const analyses = await listAllAnalyses();
   let updated = 0;
   for (const analysis of analyses) {
-    const summary = buildMarketSummary(analysis.result.rows, analysis.result.columns);
-    await updateAnalysisResult(analysis.id, { ...analysis.result, summary });
+    const result = await refreshServicesInResult(analysis.result);
+    await updateAnalysisResult(analysis.id, result);
     updated += 1;
   }
   return Response.json({ updated, message: `Пересчитано анализов: ${updated}` });

@@ -81,7 +81,9 @@ test("builds a complete SEO service catalog and can rebuild saved analyses", asy
   assert.match(analysis, /function buildServiceCatalog/);
   assert.match(analysis, /competitorsList/);
   assert.match(analysis, /suggestedPage/);
-  assert.match(page, /Полный каталог услуг для SEO-структуры/);
+  assert.match(page, /Услуги конкурентов для SEO-структуры/);
+  assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
+  assert.match(analysis, /только по названиям, найденным в разделах «Услуги»/);
   assert.match(xlsx, /SEO-каталог/);
   assert.match(rebuild, /listAllAnalyses/);
   assert.match(rebuild, /updateAnalysisResult/);

@@ -1,5 +1,5 @@
 export const COLUMNS = [
-  "Название", "Сайт", "Тип продукта", "Ассортимент", "УТП", "Ценовой сегмент", "География", "Производство",
+  "Название", "Сайт", "Тип продукта", "Ассортимент", "Услуги", "УТП", "Ценовой сегмент", "География", "Производство",
   "Индивидуальные решения", "Каналы", "Кейсы", "Сильные стороны", "Слабые стороны", "Особенности", "ОКВЭД", "Оборотка",
 ] as const;
 
@@ -16,6 +16,7 @@ export type ServiceCatalogItem = MarketItem & {
 };
 export type ServiceCluster = { name: string; services: string[] };
 export type MarketSummary = {
+  serviceCatalogVersion: number;
   leaders: MarketLeader[];
   services: MarketItem[];
   serviceCatalog: ServiceCatalogItem[];
@@ -126,6 +127,98 @@ function domainsFromSearchHtml(html: string): string[] {
   for (const match of html.matchAll(/<li[^>]+class=["'][^"']*b_algo[^"']*["'][\s\S]*?<a[^>]+href=["']([^"']+)["']/gi)) urls.push(match[1]);
   for (const match of html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']+)["']/gi)) urls.push(match[1].replace(/&amp;/g, "&"));
   return domainsFromUrls(urls);
+}
+
+type ServiceDiscovery = { services: string[]; sources: string[] };
+
+function cleanLinkLabel(value: string): string {
+  return pageText(value).replace(/^[\s\-–—•\d.)]+/u, "").replace(/\s+/g, " ").trim();
+}
+
+function pageLinks(content: string, pageUrl: string): Array<{ url: string; label: string }> {
+  const links: Array<{ url: string; label: string }> = [];
+  const add = (href: string, rawLabel: string) => {
+    const label = cleanLinkLabel(rawLabel);
+    if (!href || !label) return;
+    try { links.push({ url: new URL(href.replace(/&amp;/g, "&"), pageUrl).toString(), label }); } catch { /* Ignore malformed links. */ }
+  };
+  for (const match of content.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/giu)) add(match[1], match[2]);
+  for (const match of content.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/giu)) add(match[2], match[1]);
+  return links;
+}
+
+function sameSite(candidateUrl: string, domain: string): boolean {
+  try {
+    const candidate = normalizeDomain(new URL(candidateUrl).hostname);
+    const base = registrableDomain(domain);
+    return candidate === domain || registrableDomain(candidate) === base;
+  } catch { return false; }
+}
+
+function servicePageCandidates(content: string, pageUrl: string, domain: string): string[] {
+  const candidates = pageLinks(content, pageUrl)
+    .filter((link) => sameSite(link.url, domain) && (/^(?:услуги|наши услуги)$/iu.test(link.label) || /\/(?:uslugi|services?|service)(?:\/|$)/iu.test(new URL(link.url).pathname)))
+    .sort((a, b) => {
+      const score = (link: { url: string; label: string }) => (/^услуги$/iu.test(link.label) ? -100 : 0) + new URL(link.url).pathname.split("/").filter(Boolean).length;
+      return score(a) - score(b);
+    })
+    .map((link) => link.url.split("#")[0]);
+  return [...new Set(candidates)].slice(0, 2);
+}
+
+const serviceAction = /разработк|проектирован|установк|монтаж|демонтаж|тест|испытан|обследован|организац|регулирован|согласован|сопровожден|обслуживан|ремонт|диагностик|настройк|внедрен|изготовлен|производств|поставк|доставк|аренд|прокат|обучен|консультац|аудит|оценк|расч[её]т|нанесен|разметк|строительств|реконструкц|утилизац|эвакуац|перевозк|сертификац|экспертиз/iu;
+const genericServiceLabel = /^(?:услуги|наши услуги|все услуги|каталог услуг|главная|о компании|контакты|цены|прайс|проекты|портфолио|новости|блог|вакансии|отзывы|наши преимущества|почему мы|подробнее|узнать больше|заказать|оставить заявку|получить консультацию|обратный звонок|политика конфиденциальности|пользовательское соглашение|карта сайта|реквизиты|документы|лицензии|сертификаты|наши клиенты|наша команда)$/iu;
+
+function validServiceLabel(value: string): boolean {
+  const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
+  const words = label.split(/\s+/u);
+  return label.length >= 7 && label.length <= 150 && words.length <= 18 && !genericServiceLabel.test(label) && !/^(?:телефон|email|telegram|whatsapp|vk)$/iu.test(label);
+}
+
+export function extractServicesFromPage(content: string, pageUrl: string, domain: string): string[] {
+  const servicePath = new URL(pageUrl).pathname.replace(/\/$/u, "");
+  const found: string[] = [];
+  const add = (value: string) => {
+    const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
+    if (validServiceLabel(label) && !found.some((item) => item.toLowerCase() === label.toLowerCase())) found.push(label);
+  };
+  for (const link of pageLinks(content, pageUrl)) {
+    if (!sameSite(link.url, domain)) continue;
+    const path = new URL(link.url).pathname.replace(/\/$/u, "");
+    const nestedServicePage = servicePath && path !== servicePath && path.startsWith(`${servicePath}/`);
+    const substantiveInternalLink = path !== servicePath && path !== "/" && link.label.trim().split(/\s+/u).length >= 2 && !/\.(?:pdf|docx?|xlsx?|zip)$/iu.test(path);
+    if (nestedServicePage || serviceAction.test(link.label) || substantiveInternalLink) add(link.label);
+  }
+  for (const match of content.matchAll(/<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/giu)) if (serviceAction.test(cleanLinkLabel(match[1]))) add(match[1]);
+  for (const match of content.matchAll(/^#{1,3}\s+(.+)$/gmu)) if (serviceAction.test(match[1])) add(match[1]);
+  for (const match of content.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/giu)) if (serviceAction.test(cleanLinkLabel(match[1]))) add(match[1]);
+  return found;
+}
+
+async function fetchServicePage(url: string): Promise<string> {
+  try { return await fetchText(url, 5000); }
+  catch { return fetchText(`https://r.jina.ai/${url}`, 6500); }
+}
+
+async function discoverDomainServices(domain: string, knownPages: string[] = []): Promise<ServiceDiscovery> {
+  let candidates = knownPages.filter((url) => sameSite(url, domain)).slice(0, 2);
+  if (candidates.length === 0) {
+    const homepage = `https://${domain}/`;
+    try { candidates = servicePageCandidates(await fetchServicePage(homepage), homepage, domain); } catch { /* Try conventional service paths below. */ }
+  }
+  if (candidates.length === 0) candidates = [`https://${domain}/uslugi/`, `https://${domain}/services/`];
+  const services: string[] = [];
+  const sources: string[] = [];
+  for (const url of candidates.slice(0, 2)) {
+    try {
+      const content = await fetchServicePage(url);
+      const extracted = extractServicesFromPage(content, url, domain);
+      if (extracted.length === 0) continue;
+      sources.push(url);
+      for (const item of extracted) if (!services.some((existing) => existing.toLowerCase() === item.toLowerCase())) services.push(item);
+    } catch { /* A missing or blocked service page should not fail the whole competitor analysis. */ }
+  }
+  return { services, sources };
 }
 
 const searchStopWords = new Set([
@@ -736,7 +829,7 @@ async function legalLookup(domain: string): Promise<{ okved: string; turnover: s
   }
 }
 
-async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description, searchEvidence = "", fastFetch = false): Promise<{ row: AnalysisRow; sources: string[]; relevance: number }> {
+async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boolean, skipLegal = false, relevanceContext = input.description, searchEvidence = "", fastFetch = false): Promise<{ row: AnalysisRow; sources: string[]; relevance: number; servicePages: string[] }> {
   const url = `https://${domain}/`;
   let html = "";
   let text = "";
@@ -758,6 +851,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
     }
   }
   const metaDescription = metaDescriptionFromHtml(html) || readerDescription(html) || firstUsefulSentence(searchEvidence);
+  const servicePages = servicePageCandidates(html, url, domain);
   const inputProduct = firstUsefulSentence(input.description, "Описание продукта не указано.");
   const siteProduct = firstUsefulSentence(metaDescription, title);
   const product = isClient ? inputProduct : siteProduct;
@@ -793,6 +887,7 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
       "Сайт": domain,
       "Тип продукта": product,
       "Ассортимент": assortment,
+      "Услуги": "Не найдено: раздел услуг ещё не исследован.",
       "УТП": usp,
       "Ценовой сегмент": currentPrice,
       "География": geography,
@@ -808,10 +903,11 @@ async function analyzeDomain(domain: string, input: AnalysisInput, isClient: boo
     },
     sources: [url, legal.source].filter(Boolean),
     relevance: relevanceScore(`${title} ${metaDescription}`, text, relevanceContext, searchEvidence),
+    servicePages,
   };
 }
 
-function descriptionOnlyClient(input: AnalysisInput): { row: AnalysisRow; sources: string[]; relevance: number } {
+function descriptionOnlyClient(input: AnalysisInput): { row: AnalysisRow; sources: string[]; relevance: number; servicePages: string[] } {
   const description = input.description.trim();
   const product = firstUsefulSentence(description, "Описание продукта не указано.");
   const assortment = listFound(description, {
@@ -829,6 +925,7 @@ function descriptionOnlyClient(input: AnalysisInput): { row: AnalysisRow; source
       "Сайт": "Сайт не указан",
       "Тип продукта": product,
       "Ассортимент": assortment,
+      "Услуги": "Не применимо: сайт клиента не указан.",
       "УТП": "Определяется по описанию проекта.",
       "Ценовой сегмент": describedPrice.startsWith("Цена на") ? "Цена в описании не указана." : describedPrice,
       "География": input.region,
@@ -844,6 +941,7 @@ function descriptionOnlyClient(input: AnalysisInput): { row: AnalysisRow; source
     },
     sources: [],
     relevance: 0,
+    servicePages: [],
   };
 }
 
@@ -855,30 +953,6 @@ function hasFact(value: string | undefined): boolean {
   const normalized = (value || "").trim().toLowerCase();
   return Boolean(normalized) && !/^(не найдено|не указано|не подтверждено|—|цена на сайте не указана)/u.test(normalized);
 }
-
-const canonicalServiceRules: Array<{ name: string; pattern: RegExp }> = [
-  { name: "Доставка", pattern: /доставк|транспортиров|логистик/u },
-  { name: "Монтаж и сборка", pattern: /монтаж|сборк|установк/u },
-  { name: "Проектирование", pattern: /проектирован|разработк.{0,20}проект|эскиз/u },
-  { name: "Консультация", pattern: /консультац|консалтинг/u },
-  { name: "Подбор решения", pattern: /подбор|помощь.{0,18}выбор/u },
-  { name: "Замер", pattern: /замер/u },
-  { name: "Индивидуальное решение", pattern: /индивидуальн|под заказ|кастом|нестандарт/u },
-  { name: "Собственное производство", pattern: /собственн.{0,25}производ|производим|изготавливаем/u },
-  { name: "Ремонт", pattern: /ремонт/u },
-  { name: "Техническое обслуживание", pattern: /техническ.{0,18}обслужив|сервисн.{0,18}обслужив|техобслужив/u },
-  { name: "Поддержка", pattern: /поддержк|сопровожден/u },
-  { name: "Обучение", pattern: /обучен|курс|вебинар|тренинг/u },
-  { name: "Аудит", pattern: /аудит|диагностик/u },
-  { name: "Интеграция", pattern: /интеграц/u },
-  { name: "Аренда", pattern: /аренд/u },
-  { name: "Рассрочка и кредитование", pattern: /рассроч|кредитован|лизинг/u },
-  { name: "Гарантия", pattern: /гарант/u },
-  { name: "Утепление и климат", pattern: /утепл|терморежим|обогрев|вентиляц|кондиционир/u },
-  { name: "Системы хранения", pattern: /стеллаж|полк|ящик|крюч|органайзер/u },
-  { name: "Фундамент", pattern: /фундамент|сва|щеб/u },
-  { name: "Электрика и освещение", pattern: /электрик|освещен/u },
-];
 
 function serviceCluster(name: string): string {
   const value = name.toLowerCase();
@@ -909,15 +983,14 @@ function serviceKey(value: string): string {
   return value.toLowerCase().replace(/[«»"']/g, "").replace(/\s+/g, " ").trim();
 }
 
-function buildServiceCatalog(competitors: AnalysisRow[], columns: string[], total: number): ServiceCatalogItem[] {
+function buildServiceCatalog(competitors: AnalysisRow[], total: number): ServiceCatalogItem[] {
   type Draft = { name: string; competitors: Set<string>; sources: Set<string>; evidence: Set<string> };
   const drafts = new Map<string, Draft>();
-  const serviceFields = columns.filter((column) => /тип продукта|ассортимент|услуг|сервис|решени|продукт|формат|направлен|опци|возможност|особенност/iu.test(column));
-  const ignored = /^(?:да|нет|не указано|не найдено|не подтверждено|определяется по описанию проекта|сайт не указан|россия|онлайн|офлайн|b2b|b2c)$/iu;
+  const ignored = /^(?:да|нет|не указано|не найдено.*|не подтверждено.*|не применимо.*|раздел услуг.*|услуги)$/iu;
 
   const add = (name: string, competitor: string, field: string, evidence: string) => {
     const cleaned = cleanServiceCandidate(name);
-    if (cleaned.length < 3 || cleaned.length > 110 || ignored.test(cleaned) || /^https?:\/\//iu.test(cleaned)) return;
+    if (cleaned.length < 3 || cleaned.length > 150 || ignored.test(cleaned) || /^https?:\/\//iu.test(cleaned)) return;
     if (/^(?:широкий|большой|полный) ассортимент$/iu.test(cleaned)) return;
     const normalizedName = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
     const key = serviceKey(normalizedName);
@@ -930,19 +1003,12 @@ function buildServiceCatalog(competitors: AnalysisRow[], columns: string[], tota
 
   for (const row of competitors) {
     const competitor = row["Название"] || row["Сайт"] || "Конкурент";
-    for (const field of columns) {
-      const fieldValue = row[field] || "";
-      for (const rule of canonicalServiceRules) if (rule.pattern.test(fieldValue.toLowerCase())) add(rule.name, competitor, field, fieldValue);
-    }
-    for (const field of serviceFields) {
-      const value = (row[field] || "").trim();
-      if (!hasFact(value)) continue;
-      const chunks = value.split(/\r?\n|[;•|]+|,\s+(?=[а-яёa-z0-9])/iu).map(cleanServiceCandidate).filter(Boolean);
-      for (const chunk of chunks) {
-        if (chunk.length > 110 || /(?:не удалось|требуется|не применимо|клиент \/ эталон)/iu.test(chunk)) continue;
-        const canonical = canonicalServiceRules.find((rule) => rule.pattern.test(chunk.toLowerCase()));
-        add(canonical?.name || chunk, competitor, field, chunk);
-      }
+    const value = (row["Услуги"] || "").trim();
+    if (!hasFact(value)) continue;
+    const chunks = value.split(/\r?\n|[;•|]+/u).map(cleanServiceCandidate).filter(Boolean);
+    for (const chunk of chunks) {
+      if (chunk.length > 150 || /(?:не удалось|требуется|не применимо|раздел услуг)/iu.test(chunk)) continue;
+      add(chunk, competitor, "Услуги", chunk);
     }
   }
 
@@ -965,7 +1031,7 @@ function buildServiceCatalog(competitors: AnalysisRow[], columns: string[], tota
 export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): MarketSummary {
   const competitors = rows.filter((row) => !row["Название"].includes("(клиент)"));
   const total = competitors.length || 1;
-  const serviceCatalog = buildServiceCatalog(competitors, columns, total);
+  const serviceCatalog = buildServiceCatalog(competitors, total);
   const services = serviceCatalog.map(({ name, competitors: count, coverage: share }) => ({ name, competitors: count, coverage: share }));
   const serviceClusters = [...new Set(serviceCatalog.map((item) => item.cluster))].map((name) => ({ name, services: serviceCatalog.filter((item) => item.cluster === name).map((item) => item.name) }));
   const coverage = columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number])).map((name) => {
@@ -997,6 +1063,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
+    serviceCatalogVersion: 2,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
@@ -1006,7 +1073,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     gaps,
     recommendations,
     risks,
-    methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Полный каталог услуг нормализуется из данных всех конкурентов, сохраняет привязку к компаниям и группируется в кластеры для будущей SEO-структуры. Это не оценка выручки или доли рынка.",
+    methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Каталог услуг составляется только по названиям, найденным в разделах «Услуги» конкурентов; ассортимент, типы продуктов и общие характеристики в него не включаются. Это не оценка выручки или доли рынка.",
   };
 }
 
@@ -1170,22 +1237,52 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   }
 
-  await mapWithConcurrency(competitors, 8, async (competitor) => {
+  await mapWithConcurrency(competitors, 16, async (competitor) => {
     const registryDomain = registrableDomain(competitor.domain);
+    const servicesTask = discoverDomainServices(competitor.domain, competitor.servicePages);
     if (verifiedIndustryDomains.has(registryDomain)) {
       competitor.row["ОКВЭД"] = "Юрстатус подтверждён реестром Банка России; код ОКВЭД требует отдельной проверки.";
       competitor.row["Оборотка"] = "Не подтверждено: выручка не опубликована в реестре Банка России.";
       competitor.sources.push(BANK_REGISTRY_SOURCE);
-      return;
+    } else {
+      const legal = await legalLookup(competitor.domain);
+      competitor.row["ОКВЭД"] = legal.okved;
+      competitor.row["Оборотка"] = legal.turnover;
+      if (legal.source) competitor.sources.push(legal.source);
     }
-    const legal = await legalLookup(competitor.domain);
-    competitor.row["ОКВЭД"] = legal.okved;
-    competitor.row["Оборотка"] = legal.turnover;
-    if (legal.source) competitor.sources.push(legal.source);
+    const serviceDiscovery = await servicesTask;
+    competitor.row["Услуги"] = serviceDiscovery.services.length ? serviceDiscovery.services.join("\n") : "Не найдено: на доступных страницах раздела «Услуги» список не подтверждён.";
+    competitor.sources.push(...serviceDiscovery.sources);
   });
   const refined = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
   const columns = [...COLUMNS, ...refined.columns];
   const normalizedRows = refined.rows.map(capitalizeSentences);
   return { columns, rows: normalizedRows, summary: buildMarketSummary(normalizedRows, columns), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+}
+
+export async function refreshServicesInResult(result: AnalysisResult): Promise<AnalysisResult> {
+  const additionalSources: string[] = [];
+  const refreshed = await mapWithConcurrency(result.rows, 16, async (row) => {
+    if ((row["Название"] || "").includes("(клиент)")) return { ...row, "Услуги": row["Услуги"] || "Не применимо: строка исследуемого проекта." };
+    const domain = normalizeDomain(row["Сайт"] || "");
+    if (!domain || !domain.includes(".")) return { ...row, "Услуги": "Не найдено: корректный сайт конкурента не указан." };
+    const discovery = await discoverDomainServices(domain);
+    additionalSources.push(...discovery.sources);
+    return {
+      ...row,
+      "Услуги": discovery.services.length ? discovery.services.join("\n") : "Не найдено: на доступных страницах раздела «Услуги» список не подтверждён.",
+    };
+  });
+  const rows = refreshed.map((item, index) => item.status === "fulfilled"
+    ? item.value
+    : { ...result.rows[index], "Услуги": "Не найдено: раздел услуг не удалось открыть автоматически." });
+  const columns = [...COLUMNS, ...result.columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number]))];
+  return {
+    ...result,
+    columns,
+    rows,
+    summary: buildMarketSummary(rows, columns),
+    sources: [...new Set([...result.sources, ...additionalSources])],
+  };
 }
