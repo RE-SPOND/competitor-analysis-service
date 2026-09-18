@@ -59,7 +59,7 @@ export default function Home() {
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
         .slice(0, 30);
       const enriched = await Promise.all(combined.map(async (item) => {
-        if ((item.summary?.serviceCatalogVersion || 0) >= 2) return item;
+        if ((item.summary?.serviceCatalogVersion || 0) >= 3) return item;
         try {
           const response = await fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: item.rows, columns: item.columns, sources: item.sources, summary: item.summary }) });
           const data = await response.json();

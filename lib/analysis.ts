@@ -166,13 +166,15 @@ function servicePageCandidates(content: string, pageUrl: string, domain: string)
   return [...new Set(candidates)].slice(0, 2);
 }
 
-const serviceAction = /разработк|проектирован|установк|монтаж|демонтаж|тест|испытан|обследован|организац|регулирован|согласован|сопровожден|обслуживан|ремонт|диагностик|настройк|внедрен|изготовлен|производств|поставк|доставк|аренд|прокат|обучен|консультац|аудит|оценк|расч[её]т|нанесен|разметк|строительств|реконструкц|утилизац|эвакуац|перевозк|сертификац|экспертиз/iu;
-const genericServiceLabel = /^(?:услуги|наши услуги|все услуги|каталог услуг|главная|о компании|контакты|цены|прайс|проекты|портфолио|новости|блог|вакансии|отзывы|наши преимущества|почему мы|подробнее|узнать больше|заказать|оставить заявку|получить консультацию|обратный звонок|политика конфиденциальности|пользовательское соглашение|карта сайта|реквизиты|документы|лицензии|сертификаты|наши клиенты|наша команда)$/iu;
+const serviceAction = /разработк|проектирован|установк|монтаж|демонтаж|тест|испытан|обследован|организац|регулирован|согласован|сопровожден|обслуживан|ремонт|диагностик|настройк|внедрен|изготовлен|(?:^|\s)производство(?:\s|$)|поставк|доставк|аренд|прокат|обучен|консультац|аудит|оценк|расч[её]т|нанесен|разметк|строительств|реконструкц|утилизац|эвакуац|перевозк|сертификац|экспертиз/iu;
+const genericServiceLabel = /^(?:услуги|услуги и цены|наши услуги|все услуги|каталог услуг|главная|о компании|контакты|цены|прайс|проекты|портфолио|новости|блог|вакансии|отзывы|наши преимущества|почему мы|подробнее|узнать больше|заказать|онлайн заявка|оставить заявку|получить консультацию|обратный звонок|политика конфиденциальности|пользовательское соглашение|карта сайта|реквизиты|документы|лицензии|сертификаты|наши клиенты|наши заказчики|наша команда|мы в сми)$/iu;
 
 function validServiceLabel(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   const words = label.split(/\s+/u);
-  return label.length >= 7 && label.length <= 150 && words.length <= 18 && !genericServiceLabel.test(label) && !/^(?:телефон|email|telegram|whatsapp|vk)$/iu.test(label);
+  return label.length >= 7 && label.length <= 150 && words.length <= 12 && !genericServiceLabel.test(label)
+    && !/^(?:телефон|email|telegram|whatsapp|vk|пример\s|калькулятор\s|продукция собственного производства)/iu.test(label)
+    && !/\$\{|(?:^|\s)работаем\s|[.!?].+[.!?]/u.test(label);
 }
 
 export function extractServicesFromPage(content: string, pageUrl: string, domain: string): string[] {
@@ -186,8 +188,7 @@ export function extractServicesFromPage(content: string, pageUrl: string, domain
     if (!sameSite(link.url, domain)) continue;
     const path = new URL(link.url).pathname.replace(/\/$/u, "");
     const nestedServicePage = servicePath && path !== servicePath && path.startsWith(`${servicePath}/`);
-    const substantiveInternalLink = path !== servicePath && path !== "/" && link.label.trim().split(/\s+/u).length >= 2 && !/\.(?:pdf|docx?|xlsx?|zip)$/iu.test(path);
-    if (nestedServicePage || serviceAction.test(link.label) || substantiveInternalLink) add(link.label);
+    if (nestedServicePage || serviceAction.test(link.label)) add(link.label);
   }
   for (const match of content.matchAll(/<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/giu)) if (serviceAction.test(cleanLinkLabel(match[1]))) add(match[1]);
   for (const match of content.matchAll(/^#{1,3}\s+(.+)$/gmu)) if (serviceAction.test(match[1])) add(match[1]);
@@ -1063,7 +1064,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 2,
+    serviceCatalogVersion: 3,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
