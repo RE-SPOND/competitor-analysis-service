@@ -8,19 +8,13 @@ export type AnalysisRow = Record<string, string>;
 export type MarketLeader = { name: string; site: string; score: number; reasons: string[] };
 export type MarketItem = { name: string; competitors: number; coverage: number };
 export type ServiceCatalogItem = MarketItem & {
-  cluster: string;
-  suggestedPage: string;
   competitorsList: string[];
-  sourceFields: string[];
-  evidence: string[];
 };
-export type ServiceCluster = { name: string; services: string[] };
 export type MarketSummary = {
   serviceCatalogVersion: number;
   leaders: MarketLeader[];
   services: MarketItem[];
   serviceCatalog: ServiceCatalogItem[];
-  serviceClusters: ServiceCluster[];
   coverage: MarketItem[];
   price: { transparent: number; total: number; note: string };
   gaps: string[];
@@ -28,7 +22,7 @@ export type MarketSummary = {
   risks: string[];
   methodology: string;
 };
-export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string };
+export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string; topicDescription?: string };
 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
@@ -157,13 +151,13 @@ function sameSite(candidateUrl: string, domain: string): boolean {
 
 function servicePageCandidates(content: string, pageUrl: string, domain: string): string[] {
   const candidates = pageLinks(content, pageUrl)
-    .filter((link) => sameSite(link.url, domain) && (/^(?:услуги|наши услуги)$/iu.test(link.label) || /\/(?:uslugi|services?|service)(?:\/|$)/iu.test(new URL(link.url).pathname)))
+    .filter((link) => sameSite(link.url, domain) && (/^(?:услуги|наши услуги)$/iu.test(link.label) || /\/(?:uslugi|services?|service)(?:\/|$)/iu.test(new URL(link.url).pathname) || serviceAction.test(link.label)))
     .sort((a, b) => {
       const score = (link: { url: string; label: string }) => (/^услуги$/iu.test(link.label) ? -100 : 0) + new URL(link.url).pathname.split("/").filter(Boolean).length;
       return score(a) - score(b);
     })
     .map((link) => link.url.split("#")[0]);
-  return [...new Set(candidates)].slice(0, 2);
+  return [...new Set(candidates)].slice(0, 80);
 }
 
 const serviceAction = /разработк|проектирован|установк|монтаж|демонтаж|тест|испытан|обследован|организац|регулирован|согласован|сопровожден|обслуживан|ремонт|диагностик|настройк|внедрен|изготовлен|(?:^|\s)производство(?:\s|$)|поставк|доставк|аренд|прокат|обучен|консультац|аудит|оценк|расч[её]т|нанесен|разметк|строительств|реконструкц|утилизац|эвакуац|перевозк|сертификац|экспертиз/iu;
@@ -178,22 +172,13 @@ function validServiceLabel(value: string): boolean {
 }
 
 export function extractServicesFromPage(content: string, pageUrl: string, domain: string): string[] {
-  const servicePath = new URL(pageUrl).pathname.replace(/\/$/u, "");
-  const found: string[] = [];
-  const add = (value: string) => {
-    const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
-    if (validServiceLabel(label) && !found.some((item) => item.toLowerCase() === label.toLowerCase())) found.push(label);
-  };
-  for (const link of pageLinks(content, pageUrl)) {
-    if (!sameSite(link.url, domain)) continue;
-    const path = new URL(link.url).pathname.replace(/\/$/u, "");
-    const nestedServicePage = servicePath && path !== servicePath && path.startsWith(`${servicePath}/`);
-    if (nestedServicePage || serviceAction.test(link.label)) add(link.label);
-  }
-  for (const match of content.matchAll(/<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/giu)) if (serviceAction.test(cleanLinkLabel(match[1]))) add(match[1]);
-  for (const match of content.matchAll(/^#{1,3}\s+(.+)$/gmu)) if (serviceAction.test(match[1])) add(match[1]);
-  for (const match of content.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/giu)) if (serviceAction.test(cleanLinkLabel(match[1]))) add(match[1]);
-  return found;
+  void pageUrl;
+  void domain;
+  const htmlHeading = content.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/iu)?.[1];
+  const markdown = content.split("Markdown Content:")[1] || content;
+  const markdownHeading = markdown.match(/^#\s+(.+)$/mu)?.[1];
+  const heading = cleanLinkLabel(htmlHeading || markdownHeading || "").replace(/[.!:]+$/u, "");
+  return validServiceLabel(heading) && !genericServiceLabel.test(heading) ? [heading] : [];
 }
 
 async function fetchServicePage(url: string): Promise<string> {
@@ -202,7 +187,7 @@ async function fetchServicePage(url: string): Promise<string> {
 }
 
 async function discoverDomainServices(domain: string, knownPages: string[] = []): Promise<ServiceDiscovery> {
-  let candidates = knownPages.filter((url) => sameSite(url, domain)).slice(0, 2);
+  let candidates = knownPages.filter((url) => sameSite(url, domain)).slice(0, 80);
   if (candidates.length === 0) {
     const homepage = `https://${domain}/`;
     try { candidates = servicePageCandidates(await fetchServicePage(homepage), homepage, domain); } catch { /* Try conventional service paths below. */ }
@@ -210,14 +195,25 @@ async function discoverDomainServices(domain: string, knownPages: string[] = [])
   if (candidates.length === 0) candidates = [`https://${domain}/uslugi/`, `https://${domain}/services/`];
   const services: string[] = [];
   const sources: string[] = [];
-  for (const url of candidates.slice(0, 2)) {
-    try {
-      const content = await fetchServicePage(url);
+  const pending = [...new Set(candidates.map((url) => url.split("#")[0]))];
+  const visited = new Set<string>();
+  const maxServicePages = 80;
+  while (pending.length > 0 && visited.size < maxServicePages) {
+    const batch = pending.splice(0, Math.min(6, maxServicePages - visited.size)).filter((url) => !visited.has(url));
+    batch.forEach((url) => visited.add(url));
+    const fetched = await mapWithConcurrency(batch, 6, async (url) => ({ url, content: await fetchServicePage(url) }));
+    for (const item of fetched) {
+      if (item.status !== "fulfilled") continue;
+      const { url, content } = item.value;
       const extracted = extractServicesFromPage(content, url, domain);
-      if (extracted.length === 0) continue;
-      sources.push(url);
-      for (const item of extracted) if (!services.some((existing) => existing.toLowerCase() === item.toLowerCase())) services.push(item);
-    } catch { /* A missing or blocked service page should not fail the whole competitor analysis. */ }
+      if (extracted.length > 0) {
+        sources.push(url);
+        for (const service of extracted) if (!services.some((existing) => serviceKey(existing) === serviceKey(service))) services.push(service);
+      }
+      for (const candidate of servicePageCandidates(content, url, domain)) {
+        if (!visited.has(candidate) && !pending.includes(candidate)) pending.push(candidate);
+      }
+    }
   }
   return { services, sources };
 }
@@ -955,22 +951,6 @@ function hasFact(value: string | undefined): boolean {
   return Boolean(normalized) && !/^(не найдено|не указано|не подтверждено|—|цена на сайте не указана)/u.test(normalized);
 }
 
-function serviceCluster(name: string): string {
-  const value = name.toLowerCase();
-  if (/проект|консультац|подбор|замер|аудит|диагност/u.test(value)) return "Проектирование и подготовка";
-  if (/достав|логист|транспорт/u.test(value)) return "Доставка и реализация";
-  if (/монтаж|сборк|установ|фундамент|запуск/u.test(value)) return "Монтаж и запуск";
-  if (/ремонт|обслужив|поддерж|сопровожд|гарант|обучен/u.test(value)) return "Сервис и поддержка";
-  if (/рассроч|кредит|лизинг|аренд/u.test(value)) return "Финансовые условия";
-  if (/индивидуаль|под заказ|утепл|климат|хранен|электрик|освещен|комплектац/u.test(value)) return "Дополнительные опции";
-  return "Основные услуги и продукты";
-}
-
-function serviceSlug(value: string): string {
-  const alphabet: Record<string, string> = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
-  return value.toLowerCase().split("").map((letter) => alphabet[letter] ?? letter).join("").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 72) || "usluga";
-}
-
 function cleanServiceCandidate(value: string): string {
   return value
     .replace(/^[\s\-–—•\d.)]+/u, "")
@@ -984,21 +964,85 @@ function serviceKey(value: string): string {
   return value.toLowerCase().replace(/[«»"']/g, "").replace(/\s+/g, " ").trim();
 }
 
+type CompetitorServices = { site: string; services: string[] };
+
+function servicesFromRow(row: AnalysisRow): string[] {
+  const value = (row["Услуги"] || "").trim();
+  if (!hasFact(value)) return [];
+  return value.split(/\r?\n/u).map(cleanServiceCandidate).filter((item) => item && validServiceLabel(item));
+}
+
+function fallbackServiceRelevance(name: string, description: string): boolean {
+  const descriptionStems = new Set(searchWords(description).map(wordStem));
+  const serviceStems = searchWords(name).map(wordStem);
+  return serviceStems.some((stem) => descriptionStems.has(stem));
+}
+
+async function filterServicesByTopic(description: string, competitors: CompetitorServices[]): Promise<Map<string, string[]>> {
+  const exactNames = new Map<string, string>();
+  for (const competitor of competitors) for (const name of competitor.services) exactNames.set(serviceKey(name), name);
+  const names = [...exactNames.values()];
+  if (!names.length) return new Map(competitors.map((item) => [item.site, []]));
+
+  const allowed = new Set<string>();
+  const apiKey = String(process.env.XAI_API_KEY || "").trim();
+  let usedModelFilter = false;
+  if (apiKey) {
+    const chunks = Array.from({ length: Math.ceil(names.length / 220) }, (_, index) => names.slice(index * 220, (index + 1) * 220));
+    const filtered = await mapWithConcurrency(chunks, 3, async (chunk) => {
+      const response = await fetch("https://api.x.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "grok-4.6",
+          temperature: 0,
+          messages: [{ role: "user", content: [
+            "Отфильтруй названия услуг конкурентов под тему исследования.",
+            `Тема и описание проекта: ${description.slice(0, 3000)}`,
+            "Оставь только услуги, которые можно предлагать в рамках этой темы. Удали товары, категории товаров, статьи, преимущества, способы оплаты, вакансии, навигацию и нерелевантные услуги.",
+            "Выбирай только точные строки из переданного списка: не переписывай, не объединяй и не придумывай новые названия.",
+            "Верни только JSON вида {\"services\":[\"точная строка из списка\"]}.",
+            JSON.stringify(chunk),
+          ].join("\n") }],
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!response.ok) throw new Error(`Grok HTTP ${response.status}`);
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const json = payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/u)?.[0];
+      const parsed = json ? JSON.parse(json) as { services?: unknown[] } : {};
+      return (parsed.services || []).map((name) => String(name));
+    });
+    filtered.forEach((result, index) => {
+      if (result.status !== "fulfilled") {
+        for (const name of chunks[index]) if (fallbackServiceRelevance(name, description)) allowed.add(serviceKey(name));
+        return;
+      }
+      usedModelFilter = true;
+      for (const name of result.value) {
+        const exact = exactNames.get(serviceKey(name));
+        if (exact) allowed.add(serviceKey(exact));
+      }
+    });
+  }
+  if (!usedModelFilter && !apiKey) for (const name of names) if (fallbackServiceRelevance(name, description)) allowed.add(serviceKey(name));
+
+  return new Map(competitors.map((competitor) => [competitor.site, competitor.services.filter((name) => allowed.has(serviceKey(name))) ]));
+}
+
 function buildServiceCatalog(competitors: AnalysisRow[], total: number): ServiceCatalogItem[] {
-  type Draft = { name: string; competitors: Set<string>; sources: Set<string>; evidence: Set<string> };
+  type Draft = { name: string; competitors: Set<string> };
   const drafts = new Map<string, Draft>();
   const ignored = /^(?:да|нет|не указано|не найдено.*|не подтверждено.*|не применимо.*|раздел услуг.*|услуги)$/iu;
 
-  const add = (name: string, competitor: string, field: string, evidence: string) => {
+  const add = (name: string, competitor: string) => {
     const cleaned = cleanServiceCandidate(name);
     if (cleaned.length < 3 || cleaned.length > 150 || ignored.test(cleaned) || /^https?:\/\//iu.test(cleaned)) return;
     if (/^(?:широкий|большой|полный) ассортимент$/iu.test(cleaned)) return;
     const normalizedName = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
     const key = serviceKey(normalizedName);
-    const existing = drafts.get(key) || { name: normalizedName, competitors: new Set<string>(), sources: new Set<string>(), evidence: new Set<string>() };
+    const existing = drafts.get(key) || { name: normalizedName, competitors: new Set<string>() };
     existing.competitors.add(competitor);
-    existing.sources.add(field);
-    if (evidence && existing.evidence.size < 4) existing.evidence.add(evidence.slice(0, 180));
     drafts.set(key, existing);
   };
 
@@ -1009,24 +1053,19 @@ function buildServiceCatalog(competitors: AnalysisRow[], total: number): Service
     const chunks = value.split(/\r?\n|[;•|]+/u).map(cleanServiceCandidate).filter(Boolean);
     for (const chunk of chunks) {
       if (chunk.length > 150 || /(?:не удалось|требуется|не применимо|раздел услуг)/iu.test(chunk)) continue;
-      add(chunk, competitor, "Услуги", chunk);
+      add(chunk, competitor);
     }
   }
 
   return [...drafts.values()].map((draft) => {
     const competitorNames = [...draft.competitors].sort((a, b) => a.localeCompare(b, "ru"));
-    const cluster = serviceCluster(draft.name);
     return {
       name: draft.name,
       competitors: competitorNames.length,
       coverage: Math.round(competitorNames.length / total * 100),
-      cluster,
-      suggestedPage: `/uslugi/${serviceSlug(draft.name)}`,
       competitorsList: competitorNames,
-      sourceFields: [...draft.sources],
-      evidence: [...draft.evidence],
     };
-  }).sort((a, b) => b.competitors - a.competitors || a.cluster.localeCompare(b.cluster, "ru") || a.name.localeCompare(b.name, "ru"));
+  }).sort((a, b) => b.competitors - a.competitors || a.name.localeCompare(b.name, "ru"));
 }
 
 export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): MarketSummary {
@@ -1034,7 +1073,6 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
   const total = competitors.length || 1;
   const serviceCatalog = buildServiceCatalog(competitors, total);
   const services = serviceCatalog.map(({ name, competitors: count, coverage: share }) => ({ name, competitors: count, coverage: share }));
-  const serviceClusters = [...new Set(serviceCatalog.map((item) => item.cluster))].map((name) => ({ name, services: serviceCatalog.filter((item) => item.cluster === name).map((item) => item.name) }));
   const coverage = columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number])).map((name) => {
     const count = competitors.filter((row) => hasFact(row[name])).length;
     return { name, competitors: count, coverage: Math.round(count / total * 100) };
@@ -1064,17 +1102,16 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 3,
+    serviceCatalogVersion: 4,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
-    serviceClusters,
     coverage,
     price: { transparent, total, note: `Цена подтверждена у ${transparent} из ${total} конкурентов.` },
     gaps,
     recommendations,
     risks,
-    methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Каталог услуг составляется только по названиям, найденным в разделах «Услуги» конкурентов; ассортимент, типы продуктов и общие характеристики в него не включаются. Это не оценка выручки или доли рынка.",
+    methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Список услуг составляется по H1 отдельных страниц услуг конкурентов и фильтруется по описанию темы; товары, навигация, преимущества и нерелевантные направления исключаются. Это не оценка выручки или доли рынка.",
   };
 }
 
@@ -1238,7 +1275,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   }
 
-  await mapWithConcurrency(competitors, 16, async (competitor) => {
+  await mapWithConcurrency(competitors, 8, async (competitor) => {
     const registryDomain = registrableDomain(competitor.domain);
     const servicesTask = discoverDomainServices(competitor.domain, competitor.servicePages);
     if (verifiedIndustryDomains.has(registryDomain)) {
@@ -1255,16 +1292,22 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     competitor.row["Услуги"] = serviceDiscovery.services.length ? serviceDiscovery.services.join("\n") : "Не найдено: на доступных страницах раздела «Услуги» список не подтверждён.";
     competitor.sources.push(...serviceDiscovery.sources);
   });
+  const filteredServices = await filterServicesByTopic(input.description, competitors.map((competitor) => ({ site: competitor.domain, services: servicesFromRow(competitor.row) })));
+  for (const competitor of competitors) {
+    const services = filteredServices.get(competitor.domain) || [];
+    competitor.row["Услуги"] = services.length ? services.join("\n") : "Не найдено: релевантные теме H1 страниц услуг не подтверждены.";
+  }
   const refined = await refineWithGrok(input, [client.row, ...competitors.map((result) => result.row)]);
   for (const result of [client, ...competitors]) sources.push(...result.sources);
   const columns = [...COLUMNS, ...refined.columns];
   const normalizedRows = refined.rows.map(capitalizeSentences);
-  return { columns, rows: normalizedRows, summary: buildMarketSummary(normalizedRows, columns), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString() };
+  return { columns, rows: normalizedRows, summary: buildMarketSummary(normalizedRows, columns), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString(), topicDescription: input.description };
 }
 
-export async function refreshServicesInResult(result: AnalysisResult): Promise<AnalysisResult> {
+export async function refreshServicesInResult(result: AnalysisResult, description = ""): Promise<AnalysisResult> {
   const additionalSources: string[] = [];
-  const refreshed = await mapWithConcurrency(result.rows, 16, async (row) => {
+  const topicDescription = description.trim() || result.topicDescription?.trim() || result.rows.find((row) => (row["Название"] || "").includes("(клиент)"))?.["Тип продукта"] || "";
+  const refreshed = await mapWithConcurrency(result.rows, 8, async (row) => {
     if ((row["Название"] || "").includes("(клиент)")) return { ...row, "Услуги": row["Услуги"] || "Не применимо: строка исследуемого проекта." };
     const domain = normalizeDomain(row["Сайт"] || "");
     if (!domain || !domain.includes(".")) return { ...row, "Услуги": "Не найдено: корректный сайт конкурента не указан." };
@@ -1278,12 +1321,21 @@ export async function refreshServicesInResult(result: AnalysisResult): Promise<A
   const rows = refreshed.map((item, index) => item.status === "fulfilled"
     ? item.value
     : { ...result.rows[index], "Услуги": "Не найдено: раздел услуг не удалось открыть автоматически." });
+  const filteredServices = await filterServicesByTopic(topicDescription, rows
+    .filter((row) => !(row["Название"] || "").includes("(клиент)"))
+    .map((row) => ({ site: row["Сайт"], services: servicesFromRow(row) })));
+  const thematicRows = rows.map((row) => {
+    if ((row["Название"] || "").includes("(клиент)")) return row;
+    const services = filteredServices.get(row["Сайт"]) || [];
+    return { ...row, "Услуги": services.length ? services.join("\n") : "Не найдено: релевантные теме H1 страниц услуг не подтверждены." };
+  });
   const columns = [...COLUMNS, ...result.columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number]))];
   return {
     ...result,
     columns,
-    rows,
-    summary: buildMarketSummary(rows, columns),
+    rows: thematicRows,
+    summary: buildMarketSummary(thematicRows, columns),
     sources: [...new Set([...result.sources, ...additionalSources])],
+    topicDescription,
   };
 }

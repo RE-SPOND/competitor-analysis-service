@@ -71,7 +71,7 @@ test("allows research to start with description only", async () => {
   assert.match(analysis, /region: input\.region\.trim\(\) \|\| "Россия"/);
 });
 
-test("builds a complete SEO service catalog and can rebuild saved analyses", async () => {
+test("builds a topic-filtered H1 service list and can rebuild saved analyses", async () => {
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
   const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
   const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
@@ -80,16 +80,21 @@ test("builds a complete SEO service catalog and can rebuild saved analyses", asy
   assert.match(analysis, /export type ServiceCatalogItem/);
   assert.match(analysis, /function buildServiceCatalog/);
   assert.match(analysis, /competitorsList/);
-  assert.match(analysis, /suggestedPage/);
-  assert.match(page, /Услуги конкурентов для SEO-структуры/);
+  assert.match(analysis, /const htmlHeading = content\.match/);
+  assert.match(analysis, /filterServicesByTopic/);
+  assert.match(analysis, /Выбирай только точные строки/);
+  assert.doesNotMatch(analysis, /suggestedPage/);
+  assert.doesNotMatch(analysis, /serviceClusters/);
+  assert.match(page, /Список услуг по теме/);
+  assert.match(page, /Без товаров, кластеров и придуманных URL/);
   assert.match(page, /summary\.serviceCatalog\.slice\(0, 5\)/);
   assert.match(page, /Свернуть до 5 услуг/);
   assert.match(page, /Показать ещё \$\{summary\.serviceCatalog\.length - 5\} услуг/);
   assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
-  assert.match(analysis, /только по названиям, найденным в разделах «Услуги»/);
-  assert.match(analysis, /serviceCatalogVersion: 3/);
-  assert.match(xlsx, /SEO-каталог/);
-  assert.match(xlsx, /for \(const item of summary\.serviceCatalog\)/);
+  assert.match(analysis, /по H1 отдельных страниц услуг конкурентов/);
+  assert.match(analysis, /serviceCatalogVersion: 4/);
+  assert.match(xlsx, /sheet name="Услуги"/);
+  assert.match(xlsx, /serviceCatalog \|\| \[\]/);
   assert.match(rebuild, /listAllAnalyses/);
   assert.match(rebuild, /updateAnalysisResult/);
 });

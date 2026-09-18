@@ -2,7 +2,7 @@ import { isAuthenticated, unauthorized } from "../_auth";
 import { analyzeProject, type AnalysisInput } from "../../../lib/analysis";
 import { saveAnalysis } from "../../../lib/storage";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
