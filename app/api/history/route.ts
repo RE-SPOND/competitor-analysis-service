@@ -1,7 +1,7 @@
 import { isAuthenticated, unauthorized } from "../_auth";
 import type { AnalysisInput, AnalysisResult, AnalysisRow, MarketSummary } from "../../../lib/analysis";
 import { inferTopicDescription } from "../../../lib/analysis";
-import { listAnalyses, upsertAnalysis } from "../../../lib/storage";
+import { isPersistentStorageConfigured, listAnalyses, upsertAnalysis } from "../../../lib/storage";
 
 type ImportedAnalysis = {
   id?: unknown;
@@ -19,7 +19,7 @@ type ImportedAnalysis = {
 export async function GET(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
   const items = await listAnalyses();
-  return Response.json({ items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary })) });
+  return Response.json({ persistent: isPersistentStorageConfigured(), items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary })) });
 }
 
 export async function POST(request: Request) {

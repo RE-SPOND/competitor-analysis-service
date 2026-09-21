@@ -13,6 +13,10 @@ function upstashConfig() {
   return url && token ? { url, token } : null;
 }
 
+export function isPersistentStorageConfigured(): boolean {
+  return Boolean(upstashConfig());
+}
+
 async function redis<T>(command: Array<string | number>): Promise<T> {
   const config = upstashConfig();
   if (!config) throw new Error("Upstash is not configured.");
