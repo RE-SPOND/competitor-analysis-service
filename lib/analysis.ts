@@ -174,6 +174,16 @@ function validServiceLabel(value: string): boolean {
     && !/\$\{|(?:^|\s)работаем\s|[.!?].+[.!?]/u.test(label);
 }
 
+function looksLikeServiceOffering(value: string): boolean {
+  const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
+  if (!validServiceLabel(label)) return false;
+  if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
+  if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
+  return serviceAction.test(label)
+    || /(?:технические\s+)?средства?\s+(?:дорожного\s+)?(?:движения|регулирования)/iu.test(label)
+    || /(?:service|installation|delivery|maintenance|repair|consulting|design|testing)/iu.test(label);
+}
+
 function isNonServiceContentUrl(value: string): boolean {
   try { return /\/(?:blog|news|novosti|articles?|stati|cases?|keisy|portfolio|projects?|proekty|press)(?:\/|$)/iu.test(new URL(value).pathname); }
   catch { return true; }
@@ -988,7 +998,9 @@ function fallbackServiceRelevance(name: string, description: string): boolean {
 
 async function filterServicesByTopic(description: string, competitors: CompetitorServices[]): Promise<Map<string, string[]>> {
   const exactNames = new Map<string, string>();
-  for (const competitor of competitors) for (const name of competitor.services) exactNames.set(serviceKey(name), name);
+  for (const competitor of competitors) for (const name of competitor.services) {
+    if (looksLikeServiceOffering(name)) exactNames.set(serviceKey(name), name);
+  }
   const names = [...exactNames.values()];
   if (!names.length) return new Map(competitors.map((item) => [item.site, []]));
 
@@ -1037,7 +1049,7 @@ async function filterServicesByTopic(description: string, competitors: Competito
   }
   if (!usedModelFilter && !apiKey) for (const name of names) if (fallbackServiceRelevance(name, description)) allowed.add(serviceKey(name));
 
-  return new Map(competitors.map((competitor) => [competitor.site, competitor.services.filter((name) => allowed.has(serviceKey(name))) ]));
+  return new Map(competitors.map((competitor) => [competitor.site, competitor.services.filter((name) => looksLikeServiceOffering(name) && allowed.has(serviceKey(name))) ]));
 }
 
 function buildServiceCatalog(competitors: AnalysisRow[], total: number): ServiceCatalogItem[] {
@@ -1112,7 +1124,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 5,
+    serviceCatalogVersion: 6,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
