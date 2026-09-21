@@ -17,21 +17,17 @@ export function isPersistentStorageConfigured(): boolean {
   return Boolean(upstashConfig());
 }
 
-async function redis<T>(command: Array<string | number>): Promise<T> {
-  const config = upstashConfig();
-  if (!config) throw new Error("Upstash is not configured.");
-  const response = await fetch(config.url, { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" }, body: JSON.stringify(command), cache: "no-store" });
-  const payload = await response.json().catch(() => ({})) as UpstashResponse<T>;
-  if (!response.ok || payload.error) throw new Error(payload.error || "Upstash request failed.");
-  return payload.result as T;
-}
-
-async function redisPipeline(commands: Array<Array<string | number>>): Promise<void> {
+async function redisPipelineResults(commands: Array<Array<string | number>>): Promise<unknown[]> {
   const config = upstashConfig();
   if (!config) throw new Error("Upstash is not configured.");
   const response = await fetch(`${config.url}/pipeline`, { method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" }, body: JSON.stringify(commands), cache: "no-store" });
   const payload = await response.json().catch(() => []) as Array<UpstashResponse<unknown>>;
   if (!response.ok || !Array.isArray(payload) || payload.some((item) => item.error)) throw new Error(payload.find((item) => item.error)?.error || "Upstash request failed.");
+  return payload.map((item) => item.result);
+}
+
+async function redisPipeline(commands: Array<Array<string | number>>): Promise<void> {
+  await redisPipelineResults(commands);
 }
 
 function makeStoredAnalysis(input: AnalysisInput, result: AnalysisResult): StoredAnalysis {
@@ -61,9 +57,9 @@ export async function upsertAnalysis(stored: StoredAnalysis): Promise<void> {
 
 export async function listAnalyses(): Promise<StoredAnalysis[]> {
   if (!upstashConfig()) return memory.slice(-30).reverse();
-  const ids = await redis<string[]>(["ZREVRANGE", historyIndex, 0, 29]);
+  const [ids] = await redisPipelineResults([["ZREVRANGE", historyIndex, 0, 29]]) as [string[]];
   if (!ids.length) return [];
-  const values = await redis<Array<string | null>>(["MGET", ...ids]);
+  const [values] = await redisPipelineResults([["MGET", ...ids]]) as [Array<string | null>];
   return values.flatMap((value) => {
     if (!value) return [];
     try { return [JSON.parse(value) as StoredAnalysis]; } catch { return []; }
@@ -72,10 +68,10 @@ export async function listAnalyses(): Promise<StoredAnalysis[]> {
 
 export async function listAllAnalyses(): Promise<StoredAnalysis[]> {
   if (!upstashConfig()) return memory.slice().reverse();
-  const ids = await redis<string[]>(["ZREVRANGE", historyIndex, 0, -1]);
+  const [ids] = await redisPipelineResults([["ZREVRANGE", historyIndex, 0, -1]]) as [string[]];
   const items: StoredAnalysis[] = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
-    const values = await redis<Array<string | null>>(["MGET", ...ids.slice(offset, offset + 100)]);
+    const [values] = await redisPipelineResults([["MGET", ...ids.slice(offset, offset + 100)]]) as [Array<string | null>];
     for (const value of values) {
       if (!value) continue;
       try { items.push(JSON.parse(value) as StoredAnalysis); } catch { /* Ignore malformed archived records. */ }
@@ -86,7 +82,7 @@ export async function listAllAnalyses(): Promise<StoredAnalysis[]> {
 
 export async function getAnalysis(id: string): Promise<StoredAnalysis | null> {
   if (!upstashConfig()) return memory.find((item) => item.id === id) || null;
-  const value = await redis<string | null>(["GET", analysisKey(id)]);
+  const [value] = await redisPipelineResults([["GET", analysisKey(id)]]) as [string | null];
   if (!value) return null;
   try { return JSON.parse(value) as StoredAnalysis; } catch { return null; }
 }
