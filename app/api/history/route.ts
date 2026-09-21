@@ -3,6 +3,9 @@ import type { AnalysisInput, AnalysisResult, AnalysisRow, MarketSummary } from "
 import { inferTopicDescription } from "../../../lib/analysis";
 import { isPersistentStorageConfigured, listAnalyses, upsertAnalysis } from "../../../lib/storage";
 
+export const dynamic = "force-dynamic";
+const noStoreHeaders = { "Cache-Control": "private, no-store, no-cache, must-revalidate, max-age=0" };
+
 type ImportedAnalysis = {
   id?: unknown;
   title?: unknown;
@@ -19,7 +22,7 @@ type ImportedAnalysis = {
 export async function GET(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
   const items = await listAnalyses();
-  return Response.json({ persistent: isPersistentStorageConfigured(), items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary })) });
+  return Response.json({ persistent: isPersistentStorageConfigured(), items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary })) }, { headers: noStoreHeaders });
 }
 
 export async function POST(request: Request) {
@@ -54,5 +57,5 @@ export async function POST(request: Request) {
     await upsertAnalysis({ id: String(item.id), input, result, created_at: String(item.createdAt || new Date().toISOString()) });
     imported += 1;
   }
-  return Response.json({ imported });
+  return Response.json({ imported }, { headers: noStoreHeaders });
 }

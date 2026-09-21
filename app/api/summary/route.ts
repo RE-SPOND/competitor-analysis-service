@@ -1,5 +1,5 @@
 import { isAuthenticated, unauthorized } from "../_auth";
-import { buildMarketSummaryWithUsps, refreshServicesInResult, type AnalysisResult, type AnalysisRow, type MarketSummary } from "../../../lib/analysis";
+import { buildMarketSummaryWithUsps, refilterServicesInResult, refreshServicesInResult, type AnalysisResult, type AnalysisRow, type MarketSummary } from "../../../lib/analysis";
 
 export const maxDuration = 300;
 
@@ -18,8 +18,11 @@ export async function POST(request: Request) {
     generatedAt: new Date().toISOString(),
     topicDescription: String(body.description || "").trim(),
   };
-  if ((result.summary.serviceCatalogVersion || 0) >= 6) {
+  if ((result.summary.serviceCatalogVersion || 0) >= 7) {
     return Response.json({ result: { ...result, summary: await buildMarketSummaryWithUsps(result.rows, result.columns, result.topicDescription || "") } });
+  }
+  if ((result.summary.serviceCatalogVersion || 0) >= 6) {
+    return Response.json({ result: await refilterServicesInResult(result, String(body.description || "")) });
   }
   return Response.json({ result: await refreshServicesInResult(result, String(body.description || "")) });
 }

@@ -170,7 +170,8 @@ function validServiceLabel(value: string): boolean {
   const words = label.split(/\s+/u);
   return label.length >= 7 && label.length <= 150 && words.length <= 20 && !genericServiceLabel.test(label)
     && !/^(?:телефон|email|telegram|whatsapp|vk|пример\s|калькулятор\s|продукция собственного производства)/iu.test(label)
-    && !/(?:выставк|новост|реализовал[аи]?\s+проект|представляет|портфолио|кейс|\b20\d{2}\s*(?:г|год)|\bв\s+(?:москве|санкт-петербурге|самаре|казани|сочи|екатеринбурге|новосибирске)\b)/iu.test(label)
+    && !/(?:выставк|новост|реализовал[аи]?\s+проект|представляет|портфолио|кейс|\b20\d{2}\s*(?:г|год)|(?:^|\s)в\s+(?:москве|санкт-петербурге|самаре|казани|сочи|екатеринбурге|новосибирске)(?:\s|$))/iu.test(label)
+    && !/(?:&#\d+;?|оплата|условия доставки|наше производство|по доступным ценам|от производителя|без залога|продажа)/iu.test(label)
     && !/\$\{|(?:^|\s)работаем\s|[.!?].+[.!?]/u.test(label);
 }
 
@@ -178,6 +179,7 @@ function looksLikeServiceOffering(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   if (!validServiceLabel(label)) return false;
   if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
+  if (/^(?:модульн\w*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом(?:\s|$))/iu.test(label)) return false;
   if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
   return serviceAction.test(label)
     || /(?:технические\s+)?средства?\s+(?:дорожного\s+)?(?:движения|регулирования)/iu.test(label)
@@ -1124,7 +1126,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 6,
+    serviceCatalogVersion: 7,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
@@ -1395,7 +1397,22 @@ export function inferTopicDescription(result: AnalysisResult): string {
     .slice(0, 16)
     .flatMap((row) => [row["Тип продукта"], row["Ассортимент"]])
     .filter(Boolean);
-  return [...new Set([...clientContext, ...competitorContext])].join(". ").slice(0, 5000);
+  const context = clientContext.length ? clientContext : competitorContext;
+  return [...new Set(context)].join(". ").slice(0, 5000);
+}
+
+export async function refilterServicesInResult(result: AnalysisResult, description = ""): Promise<AnalysisResult> {
+  const topicDescription = description.trim() || result.topicDescription?.trim() || inferTopicDescription(result);
+  const filteredServices = await filterServicesByTopic(topicDescription, result.rows
+    .filter((row) => !(row["Название"] || "").includes("(клиент)"))
+    .map((row) => ({ site: row["Сайт"], services: servicesFromRow(row) })));
+  const thematicRows = result.rows.map((row) => {
+    if ((row["Название"] || "").includes("(клиент)")) return row;
+    const services = filteredServices.get(row["Сайт"]) || [];
+    return { ...row, "Услуги": services.length ? services.join("\n") : "Не найдено: релевантные теме H1 страниц услуг не подтверждены." };
+  });
+  const columns = [...COLUMNS, ...result.columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number]))];
+  return { ...result, rows: thematicRows, columns, summary: await buildMarketSummaryWithUsps(thematicRows, columns, topicDescription), topicDescription };
 }
 
 export async function refreshServicesInResult(result: AnalysisResult, description = ""): Promise<AnalysisResult> {
