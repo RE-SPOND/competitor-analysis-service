@@ -7,6 +7,7 @@ export type AnalysisInput = { title: string; projectUrl: string; description: st
 export type AnalysisRow = Record<string, string>;
 export type MarketLeader = { name: string; site: string; score: number; reasons: string[] };
 export type MarketItem = { name: string; competitors: number; coverage: number };
+export type ProposedUsp = { statement: string; rationale: string };
 export type ServiceCatalogItem = MarketItem & {
   competitorsList: string[];
 };
@@ -20,6 +21,7 @@ export type MarketSummary = {
   gaps: string[];
   recommendations: string[];
   risks: string[];
+  proposedUsps: ProposedUsp[];
   methodology: string;
 };
 export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string; topicDescription?: string };
@@ -151,7 +153,7 @@ function sameSite(candidateUrl: string, domain: string): boolean {
 
 function servicePageCandidates(content: string, pageUrl: string, domain: string): string[] {
   const candidates = pageLinks(content, pageUrl)
-    .filter((link) => sameSite(link.url, domain) && (/^(?:услуги|наши услуги)$/iu.test(link.label) || /\/(?:uslugi|services?|service)(?:\/|$)/iu.test(new URL(link.url).pathname) || serviceAction.test(link.label)))
+    .filter((link) => sameSite(link.url, domain) && !isNonServiceContentUrl(link.url) && (/^(?:услуги|наши услуги)$/iu.test(link.label) || /\/(?:uslugi|services?|service)(?:\/|$)/iu.test(new URL(link.url).pathname) || serviceAction.test(link.label)))
     .sort((a, b) => {
       const score = (link: { url: string; label: string }) => (/^услуги$/iu.test(link.label) ? -100 : 0) + new URL(link.url).pathname.split("/").filter(Boolean).length;
       return score(a) - score(b);
@@ -166,9 +168,15 @@ const genericServiceLabel = /^(?:услуги|услуги и цены|наши 
 function validServiceLabel(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   const words = label.split(/\s+/u);
-  return label.length >= 7 && label.length <= 150 && words.length <= 12 && !genericServiceLabel.test(label)
+  return label.length >= 7 && label.length <= 150 && words.length <= 20 && !genericServiceLabel.test(label)
     && !/^(?:телефон|email|telegram|whatsapp|vk|пример\s|калькулятор\s|продукция собственного производства)/iu.test(label)
+    && !/(?:выставк|новост|реализовал[аи]?\s+проект|представляет|портфолио|кейс|\b20\d{2}\s*(?:г|год)|\bв\s+(?:москве|санкт-петербурге|самаре|казани|сочи|екатеринбурге|новосибирске)\b)/iu.test(label)
     && !/\$\{|(?:^|\s)работаем\s|[.!?].+[.!?]/u.test(label);
+}
+
+function isNonServiceContentUrl(value: string): boolean {
+  try { return /\/(?:blog|news|novosti|articles?|stati|cases?|keisy|portfolio|projects?|proekty|press)(?:\/|$)/iu.test(new URL(value).pathname); }
+  catch { return true; }
 }
 
 export function extractServicesFromPage(content: string, pageUrl: string, domain: string): string[] {
@@ -999,7 +1007,9 @@ async function filterServicesByTopic(description: string, competitors: Competito
           messages: [{ role: "user", content: [
             "Отфильтруй названия услуг конкурентов под тему исследования.",
             `Тема и описание проекта: ${description.slice(0, 3000)}`,
-            "Оставь только услуги, которые можно предлагать в рамках этой темы. Удали товары, категории товаров, статьи, преимущества, способы оплаты, вакансии, навигацию и нерелевантные услуги.",
+            "Оставь только коммерческие услуги, которые компания может оказывать клиенту в рамках этой темы.",
+            "Строго удали товары и категории товаров, названия компаний, статьи, новости, выставки, кейсы, реализованные проекты, примеры объектов, города, преимущества, способы оплаты, вакансии, навигацию и нерелевантные направления.",
+            "Если строка описывает конкретный проект, событие или публикацию, а не услугу как предложение клиенту, обязательно исключи её.",
             "Выбирай только точные строки из переданного списка: не переписывай, не объединяй и не придумывай новые названия.",
             "Верни только JSON вида {\"services\":[\"точная строка из списка\"]}.",
             JSON.stringify(chunk),
@@ -1102,7 +1112,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 4,
+    serviceCatalogVersion: 5,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
@@ -1111,8 +1121,67 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     gaps,
     recommendations,
     risks,
+    proposedUsps: [],
     methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Список услуг составляется по H1 отдельных страниц услуг конкурентов и фильтруется по описанию темы; товары, навигация, преимущества и нерелевантные направления исключаются. Это не оценка выручки или доли рынка.",
   };
+}
+
+function fallbackProposedUsps(description: string, summary: MarketSummary): ProposedUsp[] {
+  const topic = firstUsefulSentence(description, "Предложение проекта").replace(/[.!]+$/u, "").slice(0, 90);
+  const rareServices = summary.services.filter((item) => item.coverage > 0 && item.coverage < 35).slice(0, 3).map((item) => item.name);
+  const servicePromise = rareServices.length
+    ? `Комплексное решение: ${rareServices.join(", ")}`
+    : `${topic} с понятным составом работ`;
+  return [
+    { statement: servicePromise, rationale: "Объединяет востребованные, но редко представленные у конкурентов направления в одном предложении." },
+    { statement: "Прозрачный результат, сроки и стоимость до начала работ", rationale: `Цена опубликована только у ${summary.price.transparent} из ${summary.price.total} конкурентов — прозрачность может стать заметным отличием.` },
+    { statement: "Один ответственный партнёр от задачи до подтверждённого результата", rationale: "УТП усиливает ценность полного цикла и снимает риск разрозненной работы с несколькими исполнителями." },
+  ];
+}
+
+export async function buildMarketSummaryWithUsps(rows: AnalysisRow[], columns: string[], description: string): Promise<MarketSummary> {
+  const summary = buildMarketSummary(rows, columns);
+  const competitors = rows.filter((row) => !(row["Название"] || "").includes("(клиент)"));
+  const fallback = fallbackProposedUsps(description, summary);
+  const apiKey = String(process.env.XAI_API_KEY || "").trim();
+  if (!apiKey || competitors.length === 0) return { ...summary, proposedUsps: fallback };
+  const evidence = competitors.slice(0, 35).map((row) => ({
+    company: row["Название"], usp: row["УТП"], services: row["Услуги"], price: row["Ценовой сегмент"],
+    strengths: row["Сильные стороны"], weaknesses: row["Слабые стороны"], features: row["Особенности"],
+  }));
+  const prompt = [
+    "Ты стратег по позиционированию. На основе конкурентного анализа предложи 5 сильных УТП для исследуемого проекта.",
+    `Описание проекта: ${description.slice(0, 3000)}`,
+    `Пробелы рынка: ${summary.gaps.join(" ")}`,
+    `Релевантные услуги: ${summary.serviceCatalog.slice(0, 40).map((item) => item.name).join("; ")}`,
+    "Каждое УТП должно быть конкретным, полезным клиенту и заметно отличаться от типовых обещаний конкурентов.",
+    "Не придумывай факты, гарантии, сроки, цены, сертификаты или возможности проекта. Если формулировка требует внедрения условия, явно укажи это в обосновании как рекомендацию.",
+    "Не используй пустые превосходные степени вроде «лучший», «номер один», «уникальный» без доказательства.",
+    "Верни только JSON: {\"usps\":[{\"statement\":\"короткое УТП\",\"rationale\":\"почему оно сильнее конкурентов и что нужно обеспечить\"}]}",
+    JSON.stringify(evidence),
+  ].join("\n");
+  try {
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "grok-4.6", temperature: 0.35, messages: [{ role: "user", content: prompt }] }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) return { ...summary, proposedUsps: fallback };
+    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const json = payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/u)?.[0];
+    const parsed = json ? JSON.parse(json) as { usps?: Array<{ statement?: unknown; rationale?: unknown }> } : {};
+    const seen = new Set<string>();
+    const proposedUsps = (parsed.usps || []).flatMap((item) => {
+      const statement = String(item.statement || "").replace(/\s+/g, " ").trim();
+      const rationale = String(item.rationale || "").replace(/\s+/g, " ").trim();
+      const key = statement.toLowerCase();
+      if (statement.length < 10 || statement.length > 180 || rationale.length < 15 || rationale.length > 400 || seen.has(key)) return [];
+      seen.add(key);
+      return [{ statement, rationale }];
+    }).slice(0, 5);
+    return { ...summary, proposedUsps: proposedUsps.length >= 3 ? proposedUsps : fallback };
+  } catch { return { ...summary, proposedUsps: fallback }; }
 }
 
 export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResult> {
@@ -1301,12 +1370,25 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   for (const result of [client, ...competitors]) sources.push(...result.sources);
   const columns = [...COLUMNS, ...refined.columns];
   const normalizedRows = refined.rows.map(capitalizeSentences);
-  return { columns, rows: normalizedRows, summary: buildMarketSummary(normalizedRows, columns), sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString(), topicDescription: input.description };
+  const summary = await buildMarketSummaryWithUsps(normalizedRows, columns, input.description);
+  return { columns, rows: normalizedRows, summary, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString(), topicDescription: input.description };
+}
+
+export function inferTopicDescription(result: AnalysisResult): string {
+  const client = result.rows.find((row) => (row["Название"] || "").includes("(клиент)"));
+  const clientContext = [client?.["Тип продукта"], client?.["Ассортимент"]]
+    .filter((value) => value && !/^(?:название \/ предмет деятельности проекта|не найдено|не указано)/iu.test(value));
+  const competitorContext = result.rows
+    .filter((row) => !(row["Название"] || "").includes("(клиент)"))
+    .slice(0, 16)
+    .flatMap((row) => [row["Тип продукта"], row["Ассортимент"]])
+    .filter(Boolean);
+  return [...new Set([...clientContext, ...competitorContext])].join(". ").slice(0, 5000);
 }
 
 export async function refreshServicesInResult(result: AnalysisResult, description = ""): Promise<AnalysisResult> {
   const additionalSources: string[] = [];
-  const topicDescription = description.trim() || result.topicDescription?.trim() || result.rows.find((row) => (row["Название"] || "").includes("(клиент)"))?.["Тип продукта"] || "";
+  const topicDescription = description.trim() || result.topicDescription?.trim() || inferTopicDescription(result);
   const refreshed = await mapWithConcurrency(result.rows, 8, async (row) => {
     if ((row["Название"] || "").includes("(клиент)")) return { ...row, "Услуги": row["Услуги"] || "Не применимо: строка исследуемого проекта." };
     const domain = normalizeDomain(row["Сайт"] || "");
@@ -1330,11 +1412,12 @@ export async function refreshServicesInResult(result: AnalysisResult, descriptio
     return { ...row, "Услуги": services.length ? services.join("\n") : "Не найдено: релевантные теме H1 страниц услуг не подтверждены." };
   });
   const columns = [...COLUMNS, ...result.columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number]))];
+  const summary = await buildMarketSummaryWithUsps(thematicRows, columns, topicDescription);
   return {
     ...result,
     columns,
     rows: thematicRows,
-    summary: buildMarketSummary(thematicRows, columns),
+    summary,
     sources: [...new Set([...result.sources, ...additionalSources])],
     topicDescription,
   };

@@ -28,6 +28,7 @@ function sheetXml(rows: AnalysisRow[], columns: string[]): string {
 function summaryRows(summary: MarketSummary): AnalysisRow[] {
   const rows: AnalysisRow[] = [];
   for (const leader of summary.leaders) rows.push({ "Раздел": "Лидеры", "Показатель": leader.name, "Значение": `${leader.score} баллов: ${leader.reasons.join(", ") || "подтверждённые факты"}` });
+  for (const item of summary.proposedUsps || []) rows.push({ "Раздел": "Предложенные УТП", "Показатель": item.statement, "Значение": item.rationale });
   if (!summary.serviceCatalog?.length) {
     for (const item of summary.services) rows.push({ "Раздел": "Услуги и опции", "Показатель": item.name, "Значение": `${item.competitors} из ${summary.price.total} конкурентов (${item.coverage}%)` });
   }

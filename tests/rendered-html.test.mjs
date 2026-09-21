@@ -92,9 +92,39 @@ test("builds a topic-filtered H1 service list and can rebuild saved analyses", a
   assert.match(page, /Показать ещё \$\{summary\.serviceCatalog\.length - 5\} услуг/);
   assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
   assert.match(analysis, /по H1 отдельных страниц услуг конкурентов/);
-  assert.match(analysis, /serviceCatalogVersion: 4/);
+  assert.match(analysis, /serviceCatalogVersion: 5/);
   assert.match(xlsx, /sheet name="Услуги"/);
   assert.match(xlsx, /serviceCatalog \|\| \[\]/);
   assert.match(rebuild, /listAllAnalyses/);
   assert.match(rebuild, /updateAnalysisResult/);
+});
+
+test("proposes competitor-driven USPs and includes them in saved analyses and Excel", async () => {
+  const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
+  const summaryRoute = await readFile(new URL("app/api/summary/route.ts", projectRoot), "utf8");
+
+  assert.match(analysis, /export type ProposedUsp/);
+  assert.match(analysis, /buildMarketSummaryWithUsps/);
+  assert.match(analysis, /предложи 5 сильных УТП/);
+  assert.match(analysis, /Не придумывай факты, гарантии, сроки, цены/);
+  assert.match(page, /Предложенные УТП/);
+  assert.match(page, /summary\.proposedUsps/);
+  assert.match(xlsx, /"Раздел": "Предложенные УТП"/);
+  assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 5/);
+  assert.match(summaryRoute, /buildMarketSummaryWithUsps/);
+});
+
+test("migrates local history with inferred topics and persists it in Upstash", async () => {
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  const historyRoute = await readFile(new URL("app/api/history/route.ts", projectRoot), "utf8");
+  const storage = await readFile(new URL("lib/storage.ts", projectRoot), "utf8");
+
+  assert.match(page, /function savedAnalysisTopic/);
+  assert.match(page, /description = savedAnalysisTopic\(item\)/);
+  assert.match(page, /fetch\("\/api\/history", \{ method: "POST"/);
+  assert.match(historyRoute, /export async function POST/);
+  assert.match(historyRoute, /inferTopicDescription\(result\)/);
+  assert.match(storage, /export async function upsertAnalysis/);
 });

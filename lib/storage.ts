@@ -41,6 +41,20 @@ export async function saveAnalysis(input: AnalysisInput, result: AnalysisResult)
   return stored.id;
 }
 
+export async function upsertAnalysis(stored: StoredAnalysis): Promise<void> {
+  if (!upstashConfig()) {
+    const index = memory.findIndex((item) => item.id === stored.id);
+    if (index >= 0) memory[index] = stored;
+    else memory.push(stored);
+    return;
+  }
+  const score = Date.parse(stored.created_at);
+  await redisPipeline([
+    ["SET", analysisKey(stored.id), JSON.stringify(stored)],
+    ["ZADD", historyIndex, Number.isFinite(score) ? score : Date.now(), stored.id],
+  ]);
+}
+
 export async function listAnalyses(): Promise<StoredAnalysis[]> {
   if (!upstashConfig()) return memory.slice(-30).reverse();
   const ids = await redis<string[]>(["ZREVRANGE", historyIndex, 0, 29]);

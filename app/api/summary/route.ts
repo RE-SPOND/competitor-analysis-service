@@ -1,5 +1,5 @@
 import { isAuthenticated, unauthorized } from "../_auth";
-import { refreshServicesInResult, type AnalysisResult, type AnalysisRow, type MarketSummary } from "../../../lib/analysis";
+import { buildMarketSummaryWithUsps, refreshServicesInResult, type AnalysisResult, type AnalysisRow, type MarketSummary } from "../../../lib/analysis";
 
 export const maxDuration = 300;
 
@@ -13,10 +13,13 @@ export async function POST(request: Request) {
     rows: body.rows,
     columns: body.columns,
     sources: Array.isArray(body.sources) ? body.sources : [],
-    summary: body.summary || { serviceCatalogVersion: 0, leaders: [], services: [], serviceCatalog: [], coverage: [], price: { transparent: 0, total: 0, note: "" }, gaps: [], recommendations: [], risks: [], methodology: "" },
+    summary: body.summary || { serviceCatalogVersion: 0, leaders: [], services: [], serviceCatalog: [], coverage: [], price: { transparent: 0, total: 0, note: "" }, gaps: [], recommendations: [], risks: [], proposedUsps: [], methodology: "" },
     queries: [],
     generatedAt: new Date().toISOString(),
     topicDescription: String(body.description || "").trim(),
   };
+  if ((result.summary.serviceCatalogVersion || 0) >= 5) {
+    return Response.json({ result: { ...result, summary: await buildMarketSummaryWithUsps(result.rows, result.columns, result.topicDescription || "") } });
+  }
   return Response.json({ result: await refreshServicesInResult(result, String(body.description || "")) });
 }
