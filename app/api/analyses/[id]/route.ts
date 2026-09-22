@@ -1,5 +1,5 @@
 import { isAuthenticated, unauthorized } from "../../_auth";
-import { renameAnalysis } from "../../../../lib/storage";
+import { deleteAnalysis, renameAnalysis } from "../../../../lib/storage";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!isAuthenticated(request)) return unauthorized();
@@ -9,4 +9,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const analysis = await renameAnalysis((await params).id, title);
   if (!analysis) return Response.json({ error: "Анализ не найден." }, { status: 404 });
   return Response.json({ id: analysis.id, title: analysis.input.title });
+}
+
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (!isAuthenticated(request)) return unauthorized();
+  const deleted = await deleteAnalysis((await params).id);
+  if (!deleted) return Response.json({ error: "Анализ не найден." }, { status: 404 });
+  return Response.json({ deleted: true });
 }

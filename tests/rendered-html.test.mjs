@@ -132,3 +132,15 @@ test("migrates local history with inferred topics and persists it in Upstash", a
   assert.match(historyRoute, /inferTopicDescription\(result\)/);
   assert.match(storage, /export async function upsertAnalysis/);
 });
+
+test("deletes saved analyses from persistent and browser history", async () => {
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  const storage = await readFile(new URL("lib/storage.ts", projectRoot), "utf8");
+  const analysisRoute = await readFile(new URL("app/api/analyses/[id]/route.ts", projectRoot), "utf8");
+
+  assert.match(page, /Удалить анализ/);
+  assert.match(page, /method: "DELETE"/);
+  assert.match(storage, /export async function deleteAnalysis/);
+  assert.match(storage, /\["ZREM", historyIndex, id\]/);
+  assert.match(analysisRoute, /export async function DELETE/);
+});

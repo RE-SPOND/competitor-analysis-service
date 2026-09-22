@@ -106,6 +106,20 @@ export async function renameAnalysis(id: string, title: string): Promise<StoredA
   return updated;
 }
 
+export async function deleteAnalysis(id: string): Promise<boolean> {
+  if (!upstashConfig()) {
+    const index = memory.findIndex((item) => item.id === id);
+    if (index < 0) return false;
+    memory.splice(index, 1);
+    return true;
+  }
+  const [deleted] = await redisPipelineResults([
+    ["DEL", analysisKey(id)],
+    ["ZREM", historyIndex, id],
+  ]);
+  return Number(deleted) > 0;
+}
+
 export async function updateAnalysisResult(id: string, result: AnalysisResult): Promise<StoredAnalysis | null> {
   const analysis = await getAnalysis(id);
   if (!analysis) return null;
