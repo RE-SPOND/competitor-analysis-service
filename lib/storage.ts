@@ -65,7 +65,7 @@ export async function listAnalyses(): Promise<StoredAnalysis[]> {
   if (!upstashConfig()) return memory.slice(-30).reverse();
   const [ids] = await redisPipelineResults([["ZREVRANGE", historyIndex, 0, 29]]) as [string[]];
   if (!ids.length) return [];
-  const [values] = await redisPipelineResults([["MGET", ...ids]]) as [Array<string | null>];
+  const [values] = await redisPipelineResults([["MGET", ...ids.map(analysisKey)]]) as [Array<string | null>];
   return values.flatMap((value) => {
     if (!value) return [];
     try { return [JSON.parse(value) as StoredAnalysis]; } catch { return []; }
@@ -77,7 +77,7 @@ export async function listAllAnalyses(): Promise<StoredAnalysis[]> {
   const [ids] = await redisPipelineResults([["ZREVRANGE", historyIndex, 0, -1]]) as [string[]];
   const items: StoredAnalysis[] = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
-    const [values] = await redisPipelineResults([["MGET", ...ids.slice(offset, offset + 100)]]) as [Array<string | null>];
+    const [values] = await redisPipelineResults([["MGET", ...ids.slice(offset, offset + 100).map(analysisKey)]]) as [Array<string | null>];
     for (const value of values) {
       if (!value) continue;
       try { items.push(JSON.parse(value) as StoredAnalysis); } catch { /* Ignore malformed archived records. */ }
