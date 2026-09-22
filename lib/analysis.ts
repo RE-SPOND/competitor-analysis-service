@@ -170,6 +170,7 @@ function validServiceLabel(value: string): boolean {
   const words = label.split(/\s+/u);
   return label.length >= 7 && label.length <= 150 && words.length <= 20 && !genericServiceLabel.test(label)
     && !/^(?:телефон|email|telegram|whatsapp|vk|пример\s|калькулятор\s|продукция собственного производства)/iu.test(label)
+    && !/^(?:более\s|бухгалтер|завод\s|инженер\s|инструкция\s|история\s|компания\s|менеджер\s|методика\s|налог\s|онлайн калькулятор|особенности\s|профиль нашей|программа\s|производитель\s|мы\s)/iu.test(label)
     && !/(?:выставк|новост|реализовал[аи]?\s+проект|представляет|портфолио|кейс|\b20\d{2}\s*(?:г|год)|(?:^|\s)в\s+(?:москве|санкт-петербурге|самаре|казани|сочи|екатеринбурге|новосибирске)(?:\s|$))/iu.test(label)
     && !/(?:&#\d+;?|оплата|условия доставки|наше производство|по доступным ценам|от производителя|без залога|продажа)/iu.test(label)
     && !/\$\{|(?:^|\s)работаем\s|[.!?].+[.!?]/u.test(label);
@@ -179,7 +180,9 @@ function looksLikeServiceOffering(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   if (!validServiceLabel(label)) return false;
   if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
-  if (/^(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом(?:\s|$))/iu.test(label)) return false;
+  if (/^(?:быстровозводим[а-яё]*\s+)?(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом|мойк|мастерск|шиномонтаж)(?:\s|$)/iu.test(label)) return false;
+  if (/^(?:краск|холодн[а-яё]*\s+пластик|материал[а-яё]*\s+для|трафарет\s+для|климатическ[а-яё]*\s+установ|комплектн[а-яё]*\s+насосн|мобильн[а-яё]*\s+(?:установ|светофор)|направляющ[а-яё]*\s+пластин)/iu.test(label)) return false;
+  if (/\b(?:АК|ХП|ХСП|BIOPRIME|E)\s*[-–]?\s*\d{1,4}\b/u.test(label)) return false;
   if (/^(?:как|возможн|какой|какая|какие|сколько|почему)\b|\?$/iu.test(label)) return false;
   if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
   return serviceAction.test(label)
@@ -1002,8 +1005,18 @@ function meaningfulStems(value: string): string[] {
   return searchWords(value).map(wordStem).filter((stem) => stem.length >= 5 && !genericServiceStems.has(stem));
 }
 
+function serviceTopicFocus(description: string): string {
+  const sentences = description.replace(/\s+/gu, " ").trim().split(/(?<=[.!?])\s+/u).filter(Boolean);
+  const selected: string[] = [];
+  for (const sentence of sentences) {
+    selected.push(sentence);
+    if (selected.join(" ").length >= 140) break;
+  }
+  return selected.join(" ").slice(0, 700) || description.slice(0, 700);
+}
+
 function fallbackServiceRelevance(name: string, description: string, competitorContext = ""): boolean {
-  const descriptionStems = new Set(meaningfulStems(description));
+  const descriptionStems = new Set(meaningfulStems(serviceTopicFocus(description)));
   const nameStems = meaningfulStems(name);
   if (nameStems.length > 0) return nameStems.some((stem) => descriptionStems.has(stem));
   return meaningfulStems(competitorContext).some((stem) => descriptionStems.has(stem));
@@ -1017,6 +1030,7 @@ function serviceContextFromRow(row: AnalysisRow): string {
 }
 
 async function filterServicesByTopic(description: string, competitors: CompetitorServices[]): Promise<Map<string, string[]>> {
+  const topicFocus = serviceTopicFocus(description);
   const candidates = competitors.flatMap((competitor) => competitor.services
     .filter((name) => looksLikeServiceOffering(name))
     .filter((name) => fallbackServiceRelevance(name, description, competitor.context))
@@ -1028,7 +1042,7 @@ async function filterServicesByTopic(description: string, competitors: Competito
   const apiKey = String(process.env.XAI_API_KEY || "").trim();
   let usedModelFilter = false;
   if (apiKey) {
-    const chunks = Array.from({ length: Math.ceil(candidates.length / 120) }, (_, index) => candidates.slice(index * 120, (index + 1) * 120));
+    const chunks = Array.from({ length: Math.ceil(candidates.length / 60) }, (_, index) => candidates.slice(index * 60, (index + 1) * 60));
     const filtered = await mapWithConcurrency(chunks, 3, async (chunk) => {
       const response = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
@@ -1038,7 +1052,7 @@ async function filterServicesByTopic(description: string, competitors: Competito
           temperature: 0,
           messages: [{ role: "user", content: [
             "Отфильтруй названия услуг конкурентов под тему исследования.",
-            `Тема и описание проекта: ${description.slice(0, 3000)}`,
+            `Тема и описание проекта: ${topicFocus}`,
             "Каждая запись содержит ID, H1 страницы услуги, сайт и профиль конкретного конкурента. Оценивай H1 только в контексте этого конкурента.",
             "Оставь только коммерческие услуги, которые этот конкурент действительно может оказывать клиенту именно в рамках темы исследования.",
             "Строго удали товары и категории товаров, названия компаний, статьи, новости, выставки, кейсы, реализованные проекты, примеры объектов, города, преимущества, способы оплаты, вакансии, навигацию и нерелевантные направления.",
@@ -1049,7 +1063,7 @@ async function filterServicesByTopic(description: string, competitors: Competito
             JSON.stringify(chunk.map(({ id, site, context, name }) => ({ id, h1: name, site, competitor: context }))),
           ].join("\n") }],
         }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(60000),
       });
       if (!response.ok) throw new Error(`Grok HTTP ${response.status}`);
       const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
@@ -1151,7 +1165,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 9,
+    serviceCatalogVersion: 10,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
