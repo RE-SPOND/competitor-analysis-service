@@ -997,8 +997,9 @@ function servicesFromRow(row: AnalysisRow): string[] {
 }
 
 const genericServiceStems = new Set([
-  "аренд", "доставк", "изготов", "консуль", "монтаж", "настройк", "обслужи", "организ", "перевоз",
-  "поставк", "проекти", "произво", "разработ", "расчет", "ремонт", "строите", "тест", "установк",
+  "аренда", "доставк", "изготов", "консуль", "монтаж", "настрой", "обслужи", "организ", "перевоз",
+  "поставк", "проекти", "произво", "разрабо", "расчет", "ремонт", "строите", "тест", "тесты", "установ",
+  "проекта", "проекто", "проектн", "основно", "предлож", "санктпе", "петербу", "ленингр", "россии",
 ]);
 
 function meaningfulStems(value: string): string[] {
@@ -1163,7 +1164,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 11,
+    serviceCatalogVersion: 12,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
