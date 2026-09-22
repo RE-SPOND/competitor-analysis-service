@@ -17,12 +17,13 @@ type ImportedAnalysis = {
   columns?: unknown;
   sources?: unknown;
   summary?: unknown;
+  serviceCandidates?: unknown;
 };
 
 export async function GET(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
   const items = await listAnalyses();
-  return Response.json({ persistent: isPersistentStorageConfigured(), persistentCount: await persistentHistoryCount(), items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary })) }, { headers: noStoreHeaders });
+  return Response.json({ persistent: isPersistentStorageConfigured(), persistentCount: await persistentHistoryCount(), items: items.map((item) => ({ id: item.id, title: item.input.title || item.input.projectUrl || "Анализ по описанию", projectUrl: item.input.projectUrl, description: item.input.description, region: item.input.region, createdAt: item.created_at, rows: item.result.rows, columns: item.result.columns, sources: item.result.sources, summary: item.result.summary, serviceCandidates: item.result.serviceCandidates })) }, { headers: noStoreHeaders });
 }
 
 export async function POST(request: Request) {
@@ -44,6 +45,7 @@ export async function POST(request: Request) {
       summary,
       queries: [],
       generatedAt: String(item.createdAt || new Date().toISOString()),
+      serviceCandidates: item.serviceCandidates && typeof item.serviceCandidates === "object" ? item.serviceCandidates as Record<string, string[]> : undefined,
     };
     const explicitDescription = String(item.description || "").trim();
     const description = explicitDescription || inferTopicDescription(result) || String(item.title || "").trim();

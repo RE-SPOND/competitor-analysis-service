@@ -94,7 +94,8 @@ test("builds a topic-filtered H1 service list and can rebuild saved analyses", a
   assert.match(page, /Показать ещё \$\{summary\.serviceCatalog\.length - 5\} услуг/);
   assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
   assert.match(analysis, /по H1 отдельных страниц услуг конкурентов/);
-  assert.match(analysis, /serviceCatalogVersion: 12/);
+  assert.match(analysis, /serviceCatalogVersion: 13/);
+  assert.match(analysis, /serviceCandidates/);
   assert.match(xlsx, /sheet name="Услуги"/);
   assert.match(xlsx, /serviceCatalog \|\| \[\]/);
   assert.match(rebuild, /listAllAnalyses/);
@@ -114,7 +115,7 @@ test("proposes competitor-driven USPs and includes them in saved analyses and Ex
   assert.match(page, /Предложенные УТП/);
   assert.match(page, /summary\.proposedUsps/);
   assert.match(xlsx, /"Раздел": "Предложенные УТП"/);
-  assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 12/);
+  assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 13/);
   assert.match(summaryRoute, /refilterServicesInResult/);
   assert.match(summaryRoute, /buildMarketSummaryWithUsps/);
 });

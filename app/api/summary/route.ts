@@ -5,7 +5,7 @@ export const maxDuration = 300;
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return unauthorized();
-  const body = await request.json().catch(() => ({})) as { rows?: AnalysisRow[]; columns?: string[]; sources?: string[]; summary?: MarketSummary; description?: string };
+  const body = await request.json().catch(() => ({})) as { rows?: AnalysisRow[]; columns?: string[]; sources?: string[]; summary?: MarketSummary; description?: string; serviceCandidates?: Record<string, string[]> };
   if (!Array.isArray(body.rows) || !Array.isArray(body.columns)) {
     return Response.json({ error: "Передайте строки и столбцы анализа." }, { status: 400 });
   }
@@ -17,8 +17,9 @@ export async function POST(request: Request) {
     queries: [],
     generatedAt: new Date().toISOString(),
     topicDescription: String(body.description || "").trim(),
+    serviceCandidates: body.serviceCandidates,
   };
-  if ((result.summary.serviceCatalogVersion || 0) >= 12) {
+  if ((result.summary.serviceCatalogVersion || 0) >= 13) {
     return Response.json({ result: { ...result, summary: await buildMarketSummaryWithUsps(result.rows, result.columns, result.topicDescription || "") } });
   }
   if ((result.summary.serviceCatalogVersion || 0) >= 6) {

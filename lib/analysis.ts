@@ -24,7 +24,7 @@ export type MarketSummary = {
   proposedUsps: ProposedUsp[];
   methodology: string;
 };
-export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string; topicDescription?: string };
+export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string; topicDescription?: string; serviceCandidates?: Record<string, string[]> };
 
 const USER_AGENT = "Mozilla/5.0 (compatible; Competitor-Analysis-Service/1.0)";
 const blockedDomains = new Set([
@@ -180,8 +180,9 @@ function looksLikeServiceOffering(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   if (!validServiceLabel(label)) return false;
   if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
-  if (/^(?:быстровозводим[а-яё]*\s+)?(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом|мойк|мастерск|шиномонтаж)(?:\s|$)/iu.test(label)) return false;
+  if (/^(?:быстровозводим[а-яё]*\s+)?(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|павильон|киоск|склад|здани|дом|мойк|мастерск|шиномонтаж|пункт)[а-яё]*(?:\s|$)/iu.test(label)) return false;
   if (/^(?:краск|эмаль|термопластик|стеклошарик|холодн[а-яё]*\s+пластик|материал[а-яё]*\s+для|трафарет[ы]?\s+для|стенд[ы]?\s|климатическ[а-яё]*\s+установ|комплектн[а-яё]*\s+насосн|мобильн[а-яё]*\s+(?:установ|светофор)|направляющ[а-яё]*\s+пластин|элемент[ы]?\s+вертикальн)/iu.test(label)) return false;
+  if (/(?:суши|пицц|ролл|бургер|доставк[а-яё]*\s+(?:еды|цвет|букет|овощ|фрукт)|о['’]?кей\s+доставка|kfc|ростикс|макдональд)/iu.test(label)) return false;
   if (/\b(?:АК|ХП|ХСП|BIOPRIME|E)\s*[-–]?\s*\d{1,4}\b/u.test(label)) return false;
   if (/^(?:как|возможн|какой|какая|какие|сколько|почему)\b|\?$/iu.test(label)) return false;
   if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
@@ -1164,7 +1165,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 12,
+    serviceCatalogVersion: 13,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
@@ -1396,6 +1397,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
   }
 
+  const serviceCandidates: Record<string, string[]> = {};
   await mapWithConcurrency(competitors, 8, async (competitor) => {
     const registryDomain = registrableDomain(competitor.domain);
     const servicesTask = discoverDomainServices(competitor.domain, competitor.servicePages);
@@ -1410,6 +1412,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
       if (legal.source) competitor.sources.push(legal.source);
     }
     const serviceDiscovery = await servicesTask;
+    serviceCandidates[competitor.domain] = serviceDiscovery.services;
     competitor.row["Услуги"] = serviceDiscovery.services.length ? serviceDiscovery.services.join("\n") : "Не найдено: на доступных страницах раздела «Услуги» список не подтверждён.";
     competitor.sources.push(...serviceDiscovery.sources);
   });
@@ -1423,7 +1426,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const columns = [...COLUMNS, ...refined.columns];
   const normalizedRows = refined.rows.map(capitalizeSentences);
   const summary = await buildMarketSummaryWithUsps(normalizedRows, columns, input.description);
-  return { columns, rows: normalizedRows, summary, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString(), topicDescription: input.description };
+  return { columns, rows: normalizedRows, summary, sources: [...new Set(sources)], queries, generatedAt: new Date().toISOString(), topicDescription: input.description, serviceCandidates };
 }
 
 export function inferTopicDescription(result: AnalysisResult): string {
@@ -1443,7 +1446,7 @@ export async function refilterServicesInResult(result: AnalysisResult, descripti
   const topicDescription = description.trim() || result.topicDescription?.trim() || inferTopicDescription(result);
   const filteredServices = await filterServicesByTopic(topicDescription, result.rows
     .filter((row) => !(row["Название"] || "").includes("(клиент)"))
-    .map((row) => ({ site: row["Сайт"], context: serviceContextFromRow(row), services: servicesFromRow(row) })));
+    .map((row) => ({ site: row["Сайт"], context: serviceContextFromRow(row), services: result.serviceCandidates?.[row["Сайт"]] || servicesFromRow(row) })));
   const thematicRows = result.rows.map((row) => {
     if ((row["Название"] || "").includes("(клиент)")) return row;
     const services = filteredServices.get(row["Сайт"]) || [];
@@ -1455,12 +1458,14 @@ export async function refilterServicesInResult(result: AnalysisResult, descripti
 
 export async function refreshServicesInResult(result: AnalysisResult, description = ""): Promise<AnalysisResult> {
   const additionalSources: string[] = [];
+  const serviceCandidates: Record<string, string[]> = {};
   const topicDescription = description.trim() || result.topicDescription?.trim() || inferTopicDescription(result);
   const refreshed = await mapWithConcurrency(result.rows, 8, async (row) => {
     if ((row["Название"] || "").includes("(клиент)")) return { ...row, "Услуги": row["Услуги"] || "Не применимо: строка исследуемого проекта." };
     const domain = normalizeDomain(row["Сайт"] || "");
     if (!domain || !domain.includes(".")) return { ...row, "Услуги": "Не найдено: корректный сайт конкурента не указан." };
     const discovery = await discoverDomainServices(domain);
+    serviceCandidates[row["Сайт"]] = discovery.services;
     additionalSources.push(...discovery.sources);
     return {
       ...row,
@@ -1487,5 +1492,6 @@ export async function refreshServicesInResult(result: AnalysisResult, descriptio
     summary,
     sources: [...new Set([...result.sources, ...additionalSources])],
     topicDescription,
+    serviceCandidates,
   };
 }

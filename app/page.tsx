@@ -19,7 +19,7 @@ type MarketSummary = {
   proposedUsps?: ProposedUsp[];
   methodology: string;
 };
-type SavedAnalysis = { id: string; title: string; projectUrl: string; description?: string; region: string; createdAt: string; rows: AnalysisRow[]; columns: string[]; sources: string[]; summary: MarketSummary };
+type SavedAnalysis = { id: string; title: string; projectUrl: string; description?: string; region: string; createdAt: string; rows: AnalysisRow[]; columns: string[]; sources: string[]; summary: MarketSummary; serviceCandidates?: Record<string, string[]> };
 
 const baseColumns = [
   "Название", "Сайт", "Тип продукта", "Ассортимент", "Услуги", "УТП", "Ценовой сегмент", "География", "Производство",
@@ -82,10 +82,10 @@ export default function Home() {
         }
         try {
           const description = savedAnalysisTopic(item);
-          const response = await fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: item.rows, columns: item.columns, sources: item.sources, summary: item.summary, description }) });
+          const response = await fetch("/api/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: item.rows, columns: item.columns, sources: item.sources, summary: item.summary, description, serviceCandidates: item.serviceCandidates }) });
           const data = await response.json();
           enriched.push(response.ok && data.result
-            ? { ...item, description, rows: data.result.rows, columns: data.result.columns, sources: data.result.sources, summary: data.result.summary as MarketSummary }
+            ? { ...item, description, rows: data.result.rows, columns: data.result.columns, sources: data.result.sources, summary: data.result.summary as MarketSummary, serviceCandidates: data.result.serviceCandidates }
             : { ...item, description });
         } catch { enriched.push({ ...item, description: savedAnalysisTopic(item) }); }
       }
@@ -141,7 +141,7 @@ export default function Home() {
       setSources(data.sources ?? []);
       setSummary(data.summary ?? null);
       if (data.summary) {
-        const saved: SavedAnalysis = { id: String(data.id || crypto.randomUUID()), title: form.title, projectUrl: form.projectUrl, description: form.description, region: form.region, createdAt: new Date().toISOString(), rows: nextRows, columns: nextColumns, sources: data.sources ?? [], summary: data.summary };
+        const saved: SavedAnalysis = { id: String(data.id || crypto.randomUUID()), title: form.title, projectUrl: form.projectUrl, description: form.description, region: form.region, createdAt: new Date().toISOString(), rows: nextRows, columns: nextColumns, sources: data.sources ?? [], summary: data.summary, serviceCandidates: data.serviceCandidates };
         setHistory((current) => {
           const next = [saved, ...current].slice(0, 30);
           window.localStorage.setItem(historyStorageKey, JSON.stringify(next));
