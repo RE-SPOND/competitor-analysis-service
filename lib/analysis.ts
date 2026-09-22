@@ -181,7 +181,7 @@ function looksLikeServiceOffering(value: string): boolean {
   if (!validServiceLabel(label)) return false;
   if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
   if (/^(?:быстровозводим[а-яё]*\s+)?(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом|мойк|мастерск|шиномонтаж)(?:\s|$)/iu.test(label)) return false;
-  if (/^(?:краск|холодн[а-яё]*\s+пластик|материал[а-яё]*\s+для|трафарет\s+для|климатическ[а-яё]*\s+установ|комплектн[а-яё]*\s+насосн|мобильн[а-яё]*\s+(?:установ|светофор)|направляющ[а-яё]*\s+пластин)/iu.test(label)) return false;
+  if (/^(?:краск|эмаль|термопластик|стеклошарик|холодн[а-яё]*\s+пластик|материал[а-яё]*\s+для|трафарет[ы]?\s+для|стенд[ы]?\s|климатическ[а-яё]*\s+установ|комплектн[а-яё]*\s+насосн|мобильн[а-яё]*\s+(?:установ|светофор)|направляющ[а-яё]*\s+пластин|элемент[ы]?\s+вертикальн)/iu.test(label)) return false;
   if (/\b(?:АК|ХП|ХСП|BIOPRIME|E)\s*[-–]?\s*\d{1,4}\b/u.test(label)) return false;
   if (/^(?:как|возможн|какой|какая|какие|сколько|почему)\b|\?$/iu.test(label)) return false;
   if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
@@ -1071,15 +1071,13 @@ async function filterServicesByTopic(description: string, competitors: Competito
       const parsed = json ? JSON.parse(json) as { ids?: unknown[] } : {};
       return (parsed.ids || []).map((id) => String(id));
     });
+    usedModelFilter = filtered.some((result) => result.status === "fulfilled");
     filtered.forEach((result, index) => {
-      if (result.status !== "fulfilled") {
-        for (const candidate of chunks[index]) allowed.add(candidate.id);
-        return;
-      }
-      usedModelFilter = true;
+      if (result.status !== "fulfilled") return;
       const validIds = new Set(chunks[index].map((candidate) => candidate.id));
       for (const id of result.value) if (validIds.has(id)) allowed.add(id);
     });
+    if (!usedModelFilter) for (const candidate of candidates) allowed.add(candidate.id);
   }
   if (!usedModelFilter && !apiKey) for (const candidate of candidates) allowed.add(candidate.id);
 
@@ -1165,7 +1163,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 10,
+    serviceCatalogVersion: 11,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,

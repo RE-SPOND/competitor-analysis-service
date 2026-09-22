@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     generatedAt: new Date().toISOString(),
     topicDescription: String(body.description || "").trim(),
   };
-  if ((result.summary.serviceCatalogVersion || 0) >= 10) {
+  if ((result.summary.serviceCatalogVersion || 0) >= 11) {
     return Response.json({ result: { ...result, summary: await buildMarketSummaryWithUsps(result.rows, result.columns, result.topicDescription || "") } });
   }
   if ((result.summary.serviceCatalogVersion || 0) >= 6) {
