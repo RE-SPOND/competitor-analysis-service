@@ -17,6 +17,12 @@ export function isPersistentStorageConfigured(): boolean {
   return Boolean(upstashConfig());
 }
 
+export async function persistentHistoryCount(): Promise<number | null> {
+  if (!upstashConfig()) return null;
+  const [count] = await redisPipelineResults([["ZCARD", historyIndex]]);
+  return Number(count);
+}
+
 async function redisPipelineResults(commands: Array<Array<string | number>>): Promise<unknown[]> {
   const config = upstashConfig();
   if (!config) throw new Error("Upstash is not configured.");
