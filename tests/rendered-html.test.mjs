@@ -120,6 +120,14 @@ test("proposes competitor-driven USPs and includes them in saved analyses and Ex
   assert.match(summaryRoute, /buildMarketSummaryWithUsps/);
 });
 
+test("links market leaders to competitor websites", async () => {
+  const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
+  assert.match(page, /function competitorSiteUrl/);
+  assert.match(page, /className="leader-link"/);
+  assert.match(page, /href=\{siteUrl\}/);
+  assert.match(page, /target="_blank"/);
+});
+
 test("migrates local history with inferred topics and persists it in Upstash", async () => {
   const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
   const historyRoute = await readFile(new URL("app/api/history/route.ts", projectRoot), "utf8");
