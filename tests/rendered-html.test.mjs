@@ -84,7 +84,7 @@ test("builds a topic-filtered H1 service list and can rebuild saved analyses", a
   assert.match(analysis, /filterServicesByTopic/);
   assert.match(analysis, /function looksLikeServiceOffering/);
   assert.match(analysis, /serviceAction\.test\(label\)/);
-  assert.match(analysis, /Выбирай только точные строки/);
+  assert.match(analysis, /Верни только ID подходящих записей/);
   assert.doesNotMatch(analysis, /suggestedPage/);
   assert.doesNotMatch(analysis, /serviceClusters/);
   assert.match(page, /Список услуг по теме/);
@@ -94,7 +94,7 @@ test("builds a topic-filtered H1 service list and can rebuild saved analyses", a
   assert.match(page, /Показать ещё \$\{summary\.serviceCatalog\.length - 5\} услуг/);
   assert.match(analysis, /competitor\.row\["Услуги"\] = serviceDiscovery\.services\.length/);
   assert.match(analysis, /по H1 отдельных страниц услуг конкурентов/);
-  assert.match(analysis, /serviceCatalogVersion: 7/);
+  assert.match(analysis, /serviceCatalogVersion: 8/);
   assert.match(xlsx, /sheet name="Услуги"/);
   assert.match(xlsx, /serviceCatalog \|\| \[\]/);
   assert.match(rebuild, /listAllAnalyses/);
@@ -114,7 +114,7 @@ test("proposes competitor-driven USPs and includes them in saved analyses and Ex
   assert.match(page, /Предложенные УТП/);
   assert.match(page, /summary\.proposedUsps/);
   assert.match(xlsx, /"Раздел": "Предложенные УТП"/);
-  assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 7/);
+  assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 8/);
   assert.match(summaryRoute, /refilterServicesInResult/);
   assert.match(summaryRoute, /buildMarketSummaryWithUsps/);
 });

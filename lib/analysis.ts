@@ -984,7 +984,7 @@ function serviceKey(value: string): string {
   return value.toLowerCase().replace(/[«»"']/g, "").replace(/\s+/g, " ").trim();
 }
 
-type CompetitorServices = { site: string; services: string[] };
+type CompetitorServices = { site: string; context: string; services: string[] };
 
 function servicesFromRow(row: AnalysisRow): string[] {
   const value = (row["Услуги"] || "").trim();
@@ -992,25 +992,41 @@ function servicesFromRow(row: AnalysisRow): string[] {
   return value.split(/\r?\n/u).map(cleanServiceCandidate).filter((item) => item && validServiceLabel(item));
 }
 
-function fallbackServiceRelevance(name: string, description: string): boolean {
-  const descriptionStems = new Set(searchWords(description).map(wordStem));
-  const serviceStems = searchWords(name).map(wordStem);
-  return serviceStems.some((stem) => descriptionStems.has(stem));
+const genericServiceStems = new Set([
+  "аренд", "доставк", "изготов", "консуль", "монтаж", "настройк", "обслужи", "организ", "перевоз",
+  "поставк", "проекти", "произво", "разработ", "расчет", "ремонт", "строите", "тест", "установк",
+]);
+
+function meaningfulStems(value: string): string[] {
+  return searchWords(value).map(wordStem).filter((stem) => stem.length >= 5 && !genericServiceStems.has(stem));
+}
+
+function fallbackServiceRelevance(name: string, description: string, competitorContext = ""): boolean {
+  const descriptionStems = new Set(meaningfulStems(description));
+  const candidateStems = meaningfulStems(`${name} ${competitorContext}`);
+  return candidateStems.some((stem) => descriptionStems.has(stem));
+}
+
+function serviceContextFromRow(row: AnalysisRow): string {
+  return [row["Название"], row["Тип продукта"], row["Ассортимент"], row["Особенности"]]
+    .filter((value) => hasFact(value))
+    .join(". ")
+    .slice(0, 800);
 }
 
 async function filterServicesByTopic(description: string, competitors: CompetitorServices[]): Promise<Map<string, string[]>> {
-  const exactNames = new Map<string, string>();
-  for (const competitor of competitors) for (const name of competitor.services) {
-    if (looksLikeServiceOffering(name)) exactNames.set(serviceKey(name), name);
-  }
-  const names = [...exactNames.values()];
-  if (!names.length) return new Map(competitors.map((item) => [item.site, []]));
+  const candidates = competitors.flatMap((competitor) => competitor.services
+    .filter((name) => looksLikeServiceOffering(name))
+    .filter((name) => fallbackServiceRelevance(name, description, competitor.context))
+    .map((name) => ({ id: "", site: competitor.site, context: competitor.context, name })));
+  candidates.forEach((candidate, index) => { candidate.id = `s${index + 1}`; });
+  if (!candidates.length) return new Map(competitors.map((item) => [item.site, []]));
 
   const allowed = new Set<string>();
   const apiKey = String(process.env.XAI_API_KEY || "").trim();
   let usedModelFilter = false;
   if (apiKey) {
-    const chunks = Array.from({ length: Math.ceil(names.length / 220) }, (_, index) => names.slice(index * 220, (index + 1) * 220));
+    const chunks = Array.from({ length: Math.ceil(candidates.length / 120) }, (_, index) => candidates.slice(index * 120, (index + 1) * 120));
     const filtered = await mapWithConcurrency(chunks, 3, async (chunk) => {
       const response = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
@@ -1021,12 +1037,14 @@ async function filterServicesByTopic(description: string, competitors: Competito
           messages: [{ role: "user", content: [
             "Отфильтруй названия услуг конкурентов под тему исследования.",
             `Тема и описание проекта: ${description.slice(0, 3000)}`,
-            "Оставь только коммерческие услуги, которые компания может оказывать клиенту в рамках этой темы.",
+            "Каждая запись содержит ID, H1 страницы услуги, сайт и профиль конкретного конкурента. Оценивай H1 только в контексте этого конкурента.",
+            "Оставь только коммерческие услуги, которые этот конкурент действительно может оказывать клиенту именно в рамках темы исследования.",
             "Строго удали товары и категории товаров, названия компаний, статьи, новости, выставки, кейсы, реализованные проекты, примеры объектов, города, преимущества, способы оплаты, вакансии, навигацию и нерелевантные направления.",
+            "Общее слово действия не делает услугу релевантной: например, доставка еды не относится к модульным хозблокам, даже если в теме встречается слово «доставка».",
             "Если строка описывает конкретный проект, событие или публикацию, а не услугу как предложение клиенту, обязательно исключи её.",
-            "Выбирай только точные строки из переданного списка: не переписывай, не объединяй и не придумывай новые названия.",
-            "Верни только JSON вида {\"services\":[\"точная строка из списка\"]}.",
-            JSON.stringify(chunk),
+            "Верни только ID подходящих записей, не переписывай названия и не добавляй новые услуги.",
+            "Верни только JSON вида {\"ids\":[\"s1\",\"s2\"]}.",
+            JSON.stringify(chunk.map(({ id, site, context, name }) => ({ id, h1: name, site, competitor: context }))),
           ].join("\n") }],
         }),
         signal: AbortSignal.timeout(30000),
@@ -1034,24 +1052,29 @@ async function filterServicesByTopic(description: string, competitors: Competito
       if (!response.ok) throw new Error(`Grok HTTP ${response.status}`);
       const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
       const json = payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/u)?.[0];
-      const parsed = json ? JSON.parse(json) as { services?: unknown[] } : {};
-      return (parsed.services || []).map((name) => String(name));
+      const parsed = json ? JSON.parse(json) as { ids?: unknown[] } : {};
+      return (parsed.ids || []).map((id) => String(id));
     });
     filtered.forEach((result, index) => {
       if (result.status !== "fulfilled") {
-        for (const name of chunks[index]) if (fallbackServiceRelevance(name, description)) allowed.add(serviceKey(name));
+        for (const candidate of chunks[index]) allowed.add(candidate.id);
         return;
       }
       usedModelFilter = true;
-      for (const name of result.value) {
-        const exact = exactNames.get(serviceKey(name));
-        if (exact) allowed.add(serviceKey(exact));
-      }
+      const validIds = new Set(chunks[index].map((candidate) => candidate.id));
+      for (const id of result.value) if (validIds.has(id)) allowed.add(id);
     });
   }
-  if (!usedModelFilter && !apiKey) for (const name of names) if (fallbackServiceRelevance(name, description)) allowed.add(serviceKey(name));
+  if (!usedModelFilter && !apiKey) for (const candidate of candidates) allowed.add(candidate.id);
 
-  return new Map(competitors.map((competitor) => [competitor.site, competitor.services.filter((name) => looksLikeServiceOffering(name) && allowed.has(serviceKey(name))) ]));
+  const result = new Map(competitors.map((competitor) => [competitor.site, [] as string[]]));
+  for (const candidate of candidates) {
+    if (!allowed.has(candidate.id)) continue;
+    const services = result.get(candidate.site) || [];
+    if (!services.some((name) => serviceKey(name) === serviceKey(candidate.name))) services.push(candidate.name);
+    result.set(candidate.site, services);
+  }
+  return result;
 }
 
 function buildServiceCatalog(competitors: AnalysisRow[], total: number): ServiceCatalogItem[] {
@@ -1126,7 +1149,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 7,
+    serviceCatalogVersion: 8,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
@@ -1375,7 +1398,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     competitor.row["Услуги"] = serviceDiscovery.services.length ? serviceDiscovery.services.join("\n") : "Не найдено: на доступных страницах раздела «Услуги» список не подтверждён.";
     competitor.sources.push(...serviceDiscovery.sources);
   });
-  const filteredServices = await filterServicesByTopic(input.description, competitors.map((competitor) => ({ site: competitor.domain, services: servicesFromRow(competitor.row) })));
+  const filteredServices = await filterServicesByTopic(input.description, competitors.map((competitor) => ({ site: competitor.domain, context: serviceContextFromRow(competitor.row), services: servicesFromRow(competitor.row) })));
   for (const competitor of competitors) {
     const services = filteredServices.get(competitor.domain) || [];
     competitor.row["Услуги"] = services.length ? services.join("\n") : "Не найдено: релевантные теме H1 страниц услуг не подтверждены.";
@@ -1405,7 +1428,7 @@ export async function refilterServicesInResult(result: AnalysisResult, descripti
   const topicDescription = description.trim() || result.topicDescription?.trim() || inferTopicDescription(result);
   const filteredServices = await filterServicesByTopic(topicDescription, result.rows
     .filter((row) => !(row["Название"] || "").includes("(клиент)"))
-    .map((row) => ({ site: row["Сайт"], services: servicesFromRow(row) })));
+    .map((row) => ({ site: row["Сайт"], context: serviceContextFromRow(row), services: servicesFromRow(row) })));
   const thematicRows = result.rows.map((row) => {
     if ((row["Название"] || "").includes("(клиент)")) return row;
     const services = filteredServices.get(row["Сайт"]) || [];
@@ -1434,7 +1457,7 @@ export async function refreshServicesInResult(result: AnalysisResult, descriptio
     : { ...result.rows[index], "Услуги": "Не найдено: раздел услуг не удалось открыть автоматически." });
   const filteredServices = await filterServicesByTopic(topicDescription, rows
     .filter((row) => !(row["Название"] || "").includes("(клиент)"))
-    .map((row) => ({ site: row["Сайт"], services: servicesFromRow(row) })));
+    .map((row) => ({ site: row["Сайт"], context: serviceContextFromRow(row), services: servicesFromRow(row) })));
   const thematicRows = rows.map((row) => {
     if ((row["Название"] || "").includes("(клиент)")) return row;
     const services = filteredServices.get(row["Сайт"]) || [];
