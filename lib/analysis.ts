@@ -179,7 +179,8 @@ function looksLikeServiceOffering(value: string): boolean {
   const label = cleanLinkLabel(value).replace(/[.!:]+$/u, "");
   if (!validServiceLabel(label)) return false;
   if (/(?:купить|каталог|модель|серия|в наличии|цена от|\b\d+(?:[.,xх×]\d+)+\s*(?:м|мм|см)?\b)/iu.test(label)) return false;
-  if (/^(?:модульн\w*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом(?:\s|$))/iu.test(label)) return false;
+  if (/^(?:модульн[а-яё]*\s+)?(?:бытовк|блок-контейнер|контейнер|хозблок|гараж|ангар|штаб|штабы|павильон|киоск|склад|здани|дом(?:\s|$))/iu.test(label)) return false;
+  if (/^(?:как|возможн|какой|какая|какие|сколько|почему)\b|\?$/iu.test(label)) return false;
   if (/\sв\s+(?:г\.?\s*)?[А-ЯЁ][а-яё-]{2,}$/u.test(label)) return false;
   return serviceAction.test(label)
     || /(?:технические\s+)?средства?\s+(?:дорожного\s+)?(?:движения|регулирования)/iu.test(label)
@@ -1003,8 +1004,9 @@ function meaningfulStems(value: string): string[] {
 
 function fallbackServiceRelevance(name: string, description: string, competitorContext = ""): boolean {
   const descriptionStems = new Set(meaningfulStems(description));
-  const candidateStems = meaningfulStems(`${name} ${competitorContext}`);
-  return candidateStems.some((stem) => descriptionStems.has(stem));
+  const nameStems = meaningfulStems(name);
+  if (nameStems.length > 0) return nameStems.some((stem) => descriptionStems.has(stem));
+  return meaningfulStems(competitorContext).some((stem) => descriptionStems.has(stem));
 }
 
 function serviceContextFromRow(row: AnalysisRow): string {
@@ -1149,7 +1151,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 8,
+    serviceCatalogVersion: 9,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
