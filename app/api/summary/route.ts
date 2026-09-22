@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     topicDescription: String(body.description || "").trim(),
     serviceCandidates: body.serviceCandidates,
   };
-  if ((result.summary.serviceCatalogVersion || 0) >= 16) {
+  if ((result.summary.serviceCatalogVersion || 0) >= 17) {
     return Response.json({ result: { ...result, summary: await buildMarketSummaryWithUsps(result.rows, result.columns, result.topicDescription || "") } });
   }
   if ((result.summary.serviceCatalogVersion || 0) >= 6) {

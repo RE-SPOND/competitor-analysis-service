@@ -78,7 +78,7 @@ export default function Home() {
         .slice(0, 30);
       const enriched: SavedAnalysis[] = [];
       for (const item of combined) {
-        if ((item.summary?.serviceCatalogVersion || 0) >= 16 && item.summary?.proposedUsps?.length) {
+        if ((item.summary?.serviceCatalogVersion || 0) >= 17 && item.summary?.proposedUsps?.length) {
           enriched.push({ ...item, description: savedAnalysisTopic(item) });
           continue;
         }
