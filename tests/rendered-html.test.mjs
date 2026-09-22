@@ -102,19 +102,26 @@ test("builds a topic-filtered H1 service list and can rebuild saved analyses", a
   assert.match(rebuild, /updateAnalysisResult/);
 });
 
-test("proposes competitor-driven USPs and includes them in saved analyses and Excel", async () => {
+test("maps competitor USPs and proposes differentiated project USPs", async () => {
   const analysis = await readFile(new URL("lib/analysis.ts", projectRoot), "utf8");
   const page = await readFile(new URL("app/page.tsx", projectRoot), "utf8");
   const xlsx = await readFile(new URL("lib/xlsx.ts", projectRoot), "utf8");
   const summaryRoute = await readFile(new URL("app/api/summary/route.ts", projectRoot), "utf8");
 
   assert.match(analysis, /export type ProposedUsp/);
+  assert.match(analysis, /buildCompetitorUspPatterns/);
   assert.match(analysis, /buildMarketSummaryWithUsps/);
-  assert.match(analysis, /предложи 5 сильных УТП/);
+  assert.match(analysis, /предложи 3–5 новых УТП/);
+  assert.match(analysis, /Выявленные повторяющиеся УТП конкурентов/);
+  assert.match(analysis, /contrast/);
+  assert.match(analysis, /requirement/);
   assert.match(analysis, /Не придумывай факты, гарантии, сроки, цены/);
-  assert.match(page, /Предложенные УТП/);
+  assert.match(page, /УТП конкурентов/);
+  assert.match(page, /Новые УТП для проекта/);
+  assert.match(page, /Нужно обеспечить/);
   assert.match(page, /summary\.proposedUsps/);
-  assert.match(xlsx, /"Раздел": "Предложенные УТП"/);
+  assert.match(xlsx, /"Раздел": "УТП конкурентов"/);
+  assert.match(xlsx, /"Раздел": "Новые УТП для проекта"/);
   assert.match(summaryRoute, /serviceCatalogVersion \|\| 0\) >= 17/);
   assert.match(summaryRoute, /refilterServicesInResult/);
   assert.match(summaryRoute, /buildMarketSummaryWithUsps/);

@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     rows: body.rows,
     columns: body.columns,
     sources: Array.isArray(body.sources) ? body.sources : [],
-    summary: body.summary || { serviceCatalogVersion: 0, leaders: [], services: [], serviceCatalog: [], coverage: [], price: { transparent: 0, total: 0, note: "" }, gaps: [], recommendations: [], risks: [], proposedUsps: [], methodology: "" },
+    summary: body.summary || { serviceCatalogVersion: 0, leaders: [], services: [], serviceCatalog: [], coverage: [], price: { transparent: 0, total: 0, note: "" }, gaps: [], recommendations: [], risks: [], competitorUsps: [], proposedUsps: [], uspAnalysisVersion: 0, methodology: "" },
     queries: [],
     generatedAt: new Date().toISOString(),
     topicDescription: String(body.description || "").trim(),

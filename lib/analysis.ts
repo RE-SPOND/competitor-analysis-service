@@ -7,7 +7,8 @@ export type AnalysisInput = { title: string; projectUrl: string; description: st
 export type AnalysisRow = Record<string, string>;
 export type MarketLeader = { name: string; site: string; score: number; reasons: string[] };
 export type MarketItem = { name: string; competitors: number; coverage: number };
-export type ProposedUsp = { statement: string; rationale: string };
+export type CompetitorUspPattern = MarketItem & { competitorsList: string[]; examples: string[] };
+export type ProposedUsp = { statement: string; rationale: string; contrast?: string; requirement?: string };
 export type ServiceCatalogItem = MarketItem & {
   competitorsList: string[];
 };
@@ -21,7 +22,9 @@ export type MarketSummary = {
   gaps: string[];
   recommendations: string[];
   risks: string[];
+  competitorUsps: CompetitorUspPattern[];
   proposedUsps: ProposedUsp[];
+  uspAnalysisVersion: number;
   methodology: string;
 };
 export type AnalysisResult = { columns: string[]; rows: AnalysisRow[]; summary: MarketSummary; sources: string[]; queries: string[]; generatedAt: string; topicDescription?: string; serviceCandidates?: Record<string, string[]> };
@@ -1141,10 +1144,58 @@ function buildServiceCatalog(competitors: AnalysisRow[], total: number): Service
   }).sort((a, b) => b.competitors - a.competitors || a.name.localeCompare(b.name, "ru"));
 }
 
+function buildCompetitorUspPatterns(competitors: AnalysisRow[], total: number): CompetitorUspPattern[] {
+  type Draft = { name: string; competitors: Set<string>; examples: Set<string> };
+  const drafts = new Map<string, Draft>();
+  const taxonomy: Array<{ key: string; name: string; pattern: RegExp }> = [
+    { key: "turnkey", name: "Решение под ключ / полный цикл", pattern: /под ключ|полный цикл|от проекта до|от идеи до/iu },
+    { key: "own", name: "Собственное производство или разработка", pattern: /собственн.{0,24}(?:производ|разработ)|производител|собственная разработка/iu },
+    { key: "custom", name: "Индивидуальный подход и персонализация", pattern: /индивидуальн|персональн|под заказ|по проекту|нестандарт/iu },
+    { key: "guarantee", name: "Гарантия и снижение риска", pattern: /гарант|без риск|ответственност|страхован/iu },
+    { key: "speed", name: "Скорость и соблюдение сроков", pattern: /быстр|срочн|за \d+|точно в срок|срок/iu },
+    { key: "price", name: "Цена, экономия и прозрачная смета", pattern: /цен|стоимост|эконом|скидк|без переплат|прозрачн.{0,16}(?:цен|смет)/iu },
+    { key: "quality", name: "Качество, сертификаты и технологии", pattern: /качеств|сертификат|лиценз|технолог|стандарт|гост|испытан/iu },
+    { key: "delivery", name: "Доставка и широкая география", pattern: /доставк|по всей россии|по рф|географ|в любую точку/iu },
+    { key: "experience", name: "Опыт, кейсы и репутация", pattern: /опыт|лет на рынке|кейс|реализован|отзыв|эксперт/iu },
+    { key: "free", name: "Бесплатный первый шаг", pattern: /бесплатн|пробн|демо|расч[её]т в подарок/iu },
+    { key: "availability", name: "Доступность и сопровождение", pattern: /24\/7|поддержк|сопровожд|личный менеджер|всегда на связи/iu },
+    { key: "privacy", name: "Конфиденциальность и безопасность", pattern: /конфиденц|безопасн|защит[аы] данн/iu },
+  ];
+  const add = (key: string, name: string, competitor: string, example: string) => {
+    const draft = drafts.get(key) || { name, competitors: new Set<string>(), examples: new Set<string>() };
+    draft.competitors.add(competitor);
+    if (example.length <= 220) draft.examples.add(example);
+    drafts.set(key, draft);
+  };
+  for (const row of competitors) {
+    const usp = (row["УТП"] || "").replace(/\s+/gu, " ").trim();
+    if (!hasFact(usp) || /явное утп автоматически не выделено|определяется по описанию/iu.test(usp)) continue;
+    const competitor = row["Название"] || row["Сайт"] || "Конкурент";
+    let matched = false;
+    for (const theme of taxonomy) {
+      if (!theme.pattern.test(usp)) continue;
+      add(theme.key, theme.name, competitor, usp);
+      matched = true;
+    }
+    if (!matched && usp.length >= 8 && usp.length <= 120) add(`other:${serviceKey(usp)}`, usp, competitor, usp);
+  }
+  return [...drafts.values()].map((draft) => {
+    const competitorNames = [...draft.competitors].sort((a, b) => a.localeCompare(b, "ru"));
+    return {
+      name: draft.name,
+      competitors: competitorNames.length,
+      coverage: Math.round(competitorNames.length / total * 100),
+      competitorsList: competitorNames,
+      examples: [...draft.examples].slice(0, 3),
+    };
+  }).sort((a, b) => b.competitors - a.competitors || a.name.localeCompare(b.name, "ru"));
+}
+
 export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): MarketSummary {
   const competitors = rows.filter((row) => !row["Название"].includes("(клиент)"));
   const total = competitors.length || 1;
   const serviceCatalog = buildServiceCatalog(competitors, total);
+  const competitorUsps = buildCompetitorUspPatterns(competitors, total);
   const services = serviceCatalog.map(({ name, competitors: count, coverage: share }) => ({ name, competitors: count, coverage: share }));
   const coverage = columns.filter((column) => !COLUMNS.includes(column as typeof COLUMNS[number])).map((name) => {
     const count = competitors.filter((row) => hasFact(row[name])).length;
@@ -1184,22 +1235,36 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     gaps,
     recommendations,
     risks,
+    competitorUsps,
     proposedUsps: [],
+    uspAnalysisVersion: 2,
     methodology: "Рейтинг лидеров строится по подтверждённым открытым фактам. Список услуг составляется по H1 отдельных страниц услуг конкурентов и фильтруется по описанию темы; товары, навигация, преимущества и нерелевантные направления исключаются. Это не оценка выручки или доли рынка.",
   };
 }
 
 function fallbackProposedUsps(description: string, summary: MarketSummary): ProposedUsp[] {
-  const topic = firstUsefulSentence(description, "Предложение проекта").replace(/[.!]+$/u, "").slice(0, 90);
-  const rareServices = summary.services.filter((item) => item.coverage > 0 && item.coverage < 35).slice(0, 3).map((item) => item.name);
-  const servicePromise = rareServices.length
-    ? `Комплексное решение: ${rareServices.join(", ")}`
-    : `${topic} с понятным составом работ`;
-  return [
-    { statement: servicePromise, rationale: "Объединяет востребованные, но редко представленные у конкурентов направления в одном предложении." },
-    { statement: "Прозрачный результат, сроки и стоимость до начала работ", rationale: `Цена опубликована только у ${summary.price.transparent} из ${summary.price.total} конкурентов — прозрачность может стать заметным отличием.` },
-    { statement: "Один ответственный партнёр от задачи до подтверждённого результата", rationale: "УТП усиливает ценность полного цикла и снимает риск разрозненной работы с несколькими исполнителями." },
-  ];
+  const topic = firstUsefulSentence(description, "Предложение проекта").replace(/[.!]+$/u, "").slice(0, 110);
+  const commonPromise = summary.competitorUsps[0];
+  const rareServices = summary.services.filter((item) => item.coverage > 0 && item.coverage < 35).slice(0, 3);
+  const candidates: ProposedUsp[] = rareServices.map((service) => ({
+    statement: `${service.name}: отдельный пакет с зафиксированным результатом`,
+    rationale: `Услуга подтверждена только у ${service.competitors} из ${summary.price.total} конкурентов (${service.coverage}%), поэтому её можно вынести в самостоятельное предложение.`,
+    contrast: commonPromise ? `Рынок чаще обещает «${commonPromise.name.toLowerCase()}», но редко конкретизирует результат этой услуги.` : "У большинства конкурентов эта услуга не выделена как самостоятельное предложение.",
+    requirement: "Описать состав работ, итоговый артефакт, ограничения и критерии приёмки.",
+  }));
+  if (summary.price.transparent < Math.ceil(summary.price.total / 2)) candidates.push({
+    statement: `${topic}: понятная смета до начала работ`,
+    rationale: `Цена подтверждена лишь у ${summary.price.transparent} из ${summary.price.total} конкурентов; прозрачный расчёт отвечает на заметный пробел рынка.`,
+    contrast: "В отличие от непрозрачного запроса цены, клиент заранее понимает состав и границы предложения.",
+    requirement: "Внедрить калькуляцию или типовые пакеты и зафиксировать правила изменения сметы.",
+  });
+  if (commonPromise) candidates.push({
+    statement: `${topic}: доказательства вместо обещания «${commonPromise.name.toLowerCase()}»`,
+    rationale: `Такое обещание используют ${commonPromise.competitors} из ${summary.price.total} конкурентов (${commonPromise.coverage}%), поэтому само по себе оно уже не выделяет проект.`,
+    contrast: "Отстройка строится на проверяемом подтверждении результата, а не на повторении распространённой формулы.",
+    requirement: "Добавить измеримые критерии, кейсы или документы, которые подтверждают обещание.",
+  });
+  return candidates.slice(0, 5);
 }
 
 export async function buildMarketSummaryWithUsps(rows: AnalysisRow[], columns: string[], description: string): Promise<MarketSummary> {
@@ -1208,19 +1273,23 @@ export async function buildMarketSummaryWithUsps(rows: AnalysisRow[], columns: s
   const fallback = fallbackProposedUsps(description, summary);
   const apiKey = String(process.env.XAI_API_KEY || "").trim();
   if (!apiKey || competitors.length === 0) return { ...summary, proposedUsps: fallback };
-  const evidence = competitors.slice(0, 35).map((row) => ({
+  const evidence = competitors.slice(0, 50).map((row) => ({
     company: row["Название"], usp: row["УТП"], services: row["Услуги"], price: row["Ценовой сегмент"],
     strengths: row["Сильные стороны"], weaknesses: row["Слабые стороны"], features: row["Особенности"],
   }));
   const prompt = [
-    "Ты стратег по позиционированию. На основе конкурентного анализа предложи 5 сильных УТП для исследуемого проекта.",
+    "Ты стратег по позиционированию. На основе конкурентного анализа предложи 3–5 новых УТП для исследуемого проекта.",
     `Описание проекта: ${description.slice(0, 3000)}`,
+    `Выявленные повторяющиеся УТП конкурентов: ${JSON.stringify(summary.competitorUsps.slice(0, 12))}`,
     `Пробелы рынка: ${summary.gaps.join(" ")}`,
     `Релевантные услуги: ${summary.serviceCatalog.slice(0, 40).map((item) => item.name).join("; ")}`,
-    "Каждое УТП должно быть конкретным, полезным клиенту и заметно отличаться от типовых обещаний конкурентов.",
+    "Сначала мысленно отдели распространённые обещания конкурентов от свободных позиций. Не выдавай конкурентное клише за новое УТП.",
+    "Каждое новое УТП должно быть связано с конкретным пробелом, редкой услугой, слабостью или перенасыщенным обещанием конкурентов.",
+    "Формулировка должна быть специфична для описанного проекта: запрещены универсальные фразы «комплексное решение», «один ответственный партнёр», «индивидуальный подход», «высокое качество» без конкретного механизма и результата.",
     "Не придумывай факты, гарантии, сроки, цены, сертификаты или возможности проекта. Если формулировка требует внедрения условия, явно укажи это в обосновании как рекомендацию.",
     "Не используй пустые превосходные степени вроде «лучший», «номер один», «уникальный» без доказательства.",
-    "Верни только JSON: {\"usps\":[{\"statement\":\"короткое УТП\",\"rationale\":\"почему оно сильнее конкурентов и что нужно обеспечить\"}]}",
+    "Для каждого варианта укажи: statement — короткое УТП; rationale — на каких данных анализа основано; contrast — от какого типового обещания конкурентов отстраивается; requirement — что проект должен внедрить или доказать перед публикацией.",
+    "Верни только JSON: {\"usps\":[{\"statement\":\"...\",\"rationale\":\"...\",\"contrast\":\"...\",\"requirement\":\"...\"}]}",
     JSON.stringify(evidence),
   ].join("\n");
   try {
@@ -1228,20 +1297,23 @@ export async function buildMarketSummaryWithUsps(rows: AnalysisRow[], columns: s
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "grok-4.6", temperature: 0.35, messages: [{ role: "user", content: prompt }] }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(60000),
     });
     if (!response.ok) return { ...summary, proposedUsps: fallback };
     const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const json = payload.choices?.[0]?.message?.content?.match(/\{[\s\S]*\}/u)?.[0];
-    const parsed = json ? JSON.parse(json) as { usps?: Array<{ statement?: unknown; rationale?: unknown }> } : {};
+    const parsed = json ? JSON.parse(json) as { usps?: Array<{ statement?: unknown; rationale?: unknown; contrast?: unknown; requirement?: unknown }> } : {};
     const seen = new Set<string>();
     const proposedUsps = (parsed.usps || []).flatMap((item) => {
       const statement = String(item.statement || "").replace(/\s+/g, " ").trim();
       const rationale = String(item.rationale || "").replace(/\s+/g, " ").trim();
+      const contrast = String(item.contrast || "").replace(/\s+/g, " ").trim();
+      const requirement = String(item.requirement || "").replace(/\s+/g, " ").trim();
       const key = statement.toLowerCase();
-      if (statement.length < 10 || statement.length > 180 || rationale.length < 15 || rationale.length > 400 || seen.has(key)) return [];
+      if (statement.length < 10 || statement.length > 180 || rationale.length < 20 || rationale.length > 500 || contrast.length < 15 || requirement.length < 15 || seen.has(key)) return [];
+      if (/^(?:комплексное решение|один ответственный партн[её]р|индивидуальный подход|высокое качество)/iu.test(statement)) return [];
       seen.add(key);
-      return [{ statement, rationale }];
+      return [{ statement, rationale, contrast, requirement }];
     }).slice(0, 5);
     return { ...summary, proposedUsps: proposedUsps.length >= 3 ? proposedUsps : fallback };
   } catch { return { ...summary, proposedUsps: fallback }; }
