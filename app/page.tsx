@@ -220,8 +220,8 @@ export default function Home() {
       return next;
     });
     try {
-      const response = await fetch(`/api/analyses/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) });
-      if (!response.ok && response.status !== 404) throw new Error("Не удалось сохранить название.");
+      const response = await fetch("/api/analyses", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: item.id, title }) });
+      if (!response.ok) throw new Error("Не удалось сохранить название.");
       updateLocal();
       setEditingId(null);
     } catch (caught) {
@@ -234,8 +234,8 @@ export default function Home() {
     setError("");
     setDeletingId(item.id);
     try {
-      const response = await fetch(`/api/analyses/${item.id}`, { method: "DELETE" });
-      if (!response.ok && response.status !== 404) throw new Error("Не удалось удалить анализ.");
+      const response = await fetch("/api/analyses", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: item.id }) });
+      if (!response.ok) throw new Error("Не удалось удалить анализ.");
       setHistory((current) => {
         const next = current.filter((entry) => entry.id !== item.id);
         window.localStorage.setItem(historyStorageKey, JSON.stringify(next));
