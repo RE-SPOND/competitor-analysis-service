@@ -1024,6 +1024,12 @@ function fallbackServiceRelevance(name: string, description: string, competitorC
   return meaningfulStems(competitorContext).some((stem) => descriptionStems.has(stem));
 }
 
+function strongTopicOverlap(name: string, description: string): boolean {
+  const topicStems = new Set(meaningfulStems(serviceTopicFocus(description)));
+  const matches = new Set(meaningfulStems(name).filter((stem) => topicStems.has(stem)));
+  return matches.size >= 2;
+}
+
 function serviceContextFromRow(row: AnalysisRow): string {
   return [row["Название"], row["Тип продукта"], row["Ассортимент"], row["Особенности"]]
     .filter((value) => hasFact(value))
@@ -1079,9 +1085,9 @@ async function filterServicesByTopic(description: string, competitors: Competito
       const validIds = new Set(chunks[index].map((candidate) => candidate.id));
       for (const id of result.value) if (validIds.has(id)) allowed.add(id);
     });
-    if (!usedModelFilter) for (const candidate of candidates) allowed.add(candidate.id);
   }
   if (!usedModelFilter && !apiKey) for (const candidate of candidates) allowed.add(candidate.id);
+  for (const candidate of candidates) if (strongTopicOverlap(candidate.name, description)) allowed.add(candidate.id);
 
   const result = new Map(competitors.map((competitor) => [competitor.site, [] as string[]]));
   for (const candidate of candidates) {
@@ -1165,7 +1171,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 13,
+    serviceCatalogVersion: 14,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
