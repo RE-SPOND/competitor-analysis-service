@@ -1028,7 +1028,8 @@ function fallbackServiceRelevance(name: string, description: string, competitorC
 function strongTopicOverlap(name: string, description: string): boolean {
   const topicStems = new Set(meaningfulStems(serviceTopicFocus(description)));
   const matches = new Set(meaningfulStems(name).filter((stem) => topicStems.has(stem)));
-  return matches.size >= 2;
+  const highSignalStems = new Set(["модульн", "хозбло", "сараи", "сарай", "хранени", "натальн", "астроло", "бодигра", "рейвкар"]);
+  return matches.size >= 2 || [...matches].some((stem) => highSignalStems.has(stem));
 }
 
 function serviceContextFromRow(row: AnalysisRow): string {
@@ -1172,7 +1173,7 @@ export function buildMarketSummary(rows: AnalysisRow[], columns: string[]): Mark
     transparent < Math.ceil(total / 2) ? "У большинства конкурентов цена не опубликована: сравнение требует запросов поставщикам." : "Цены необходимо перепроверять перед коммерческими решениями: они могут быть сезонными.",
   ];
   return {
-    serviceCatalogVersion: 15,
+    serviceCatalogVersion: 16,
     leaders,
     services: services.sort((a, b) => b.coverage - a.coverage),
     serviceCatalog,
