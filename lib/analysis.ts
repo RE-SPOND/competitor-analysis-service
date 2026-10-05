@@ -761,6 +761,7 @@ function findAny(text: string, words: string[]): boolean { const lower = text.to
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
 const MIN_COMPETITOR_RELEVANCE = 6;
+const MAX_COMPETITORS = 80;
 
 function relevanceScore(primaryText: string, bodyText: string, description: string, searchEvidence = ""): number {
   const ignored = new Set([
@@ -822,6 +823,11 @@ function relevanceScore(primaryText: string, bodyText: string, description: stri
   if (categoryStems.length >= 2 && primaryCategoryMatches === 0) return 0;
   if (categoryStems.length >= 2 && categoryMatches < 2) return 0;
   return primaryMatches * 3 + bodyMatches + (matchingIndustry ? 3 : 0);
+}
+
+function searchEvidenceRelevance(searchEvidence: string, description: string): number {
+  const evidence = searchEvidence.trim();
+  return evidence ? relevanceScore(evidence, evidence, description, evidence) : 0;
 }
 
 function price(text: string): string {
@@ -1424,13 +1430,18 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   const clientPromise = clientDomain
     ? analyzeDomain(clientDomain, input, true)
     : Promise.resolve(descriptionOnlyClient(input));
-  const checkedCandidates = (await mapWithConcurrency(relevantCandidates, isBankProject ? 32 : 16, async ([domain, mentions]) => {
+  const candidatesToInspect = relevantCandidates.slice(0, MAX_COMPETITORS);
+  const checkedCandidates = (await mapWithConcurrency(candidatesToInspect, isBankProject ? 32 : 16, async ([domain, mentions]) => {
     const registryDomain = registrableDomain(domain);
     const verified = verifiedIndustryDomains.has(registryDomain);
-    const analyzed = await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "", verified);
+    const searchEvidence = evidenceByDomain.get(domain) || "";
+    const analyzed = await analyzeDomain(domain, input, false, true, relevanceContext, searchEvidence, verified);
     if (verified) {
       analyzed.relevance = Math.max(analyzed.relevance, MIN_COMPETITOR_RELEVANCE);
       analyzed.row["Название"] = verifiedIndustryNames.get(registryDomain) || analyzed.row["Название"];
+    } else {
+      const evidenceRelevance = searchEvidenceRelevance(searchEvidence, relevanceContext);
+      if (evidenceRelevance >= MIN_COMPETITOR_RELEVANCE) analyzed.relevance = Math.max(analyzed.relevance, MIN_COMPETITOR_RELEVANCE);
     }
     return { domain, mentions, ...analyzed };
   }))
@@ -1442,7 +1453,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
 
   const knownBases = new Set(candidates.map(([domain]) => registrableDomain(domain)));
-  for (let round = 0; round < 2 && industryRegistryCandidates.length === 0 && Date.now() - startedAt < 80000; round += 1) {
+  for (let round = 0; round < 2 && competitors.length < MAX_COMPETITORS && industryRegistryCandidates.length === 0 && Date.now() - startedAt < 80000; round += 1) {
     const expansionBase = basePhrase;
     if (!expansionBase) break;
     const expansionQueries = [
@@ -1471,12 +1482,19 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
     const relevantNewEntries = [...newlyFound.entries()].filter(([domain]) => {
       const evidence = evidenceByDomain.get(domain) || "";
       return !evidence || relevanceScore(evidence, evidence, relevanceContext, evidence) >= MIN_COMPETITOR_RELEVANCE;
-    });
-    const expandedCandidates = (await mapWithConcurrency(relevantNewEntries, 16, async ([domain, mentions]) => ({ domain, mentions, ...(await analyzeDomain(domain, input, false, true, relevanceContext, evidenceByDomain.get(domain) || "")) })))
+    }).slice(0, MAX_COMPETITORS - competitors.length);
+    const expandedCandidates = (await mapWithConcurrency(relevantNewEntries, 16, async ([domain, mentions]) => {
+      const searchEvidence = evidenceByDomain.get(domain) || "";
+      const analyzed = await analyzeDomain(domain, input, false, true, relevanceContext, searchEvidence);
+      const evidenceRelevance = searchEvidenceRelevance(searchEvidence, relevanceContext);
+      if (evidenceRelevance >= MIN_COMPETITOR_RELEVANCE) analyzed.relevance = Math.max(analyzed.relevance, MIN_COMPETITOR_RELEVANCE);
+      return { domain, mentions, ...analyzed };
+    }))
       .flatMap((settled) => settled.status === "fulfilled" && settled.value.relevance >= MIN_COMPETITOR_RELEVANCE ? [settled.value] : []);
     if (expandedCandidates.length === 0) break;
     competitors = [...competitors, ...expandedCandidates]
-      .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions);
+      .sort((a, b) => b.relevance - a.relevance || b.mentions - a.mentions)
+      .slice(0, MAX_COMPETITORS);
   }
 
   const serviceCandidates: Record<string, string[]> = {};
