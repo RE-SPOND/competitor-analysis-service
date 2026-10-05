@@ -162,7 +162,7 @@ function servicePageCandidates(content: string, pageUrl: string, domain: string)
       return score(a) - score(b);
     })
     .map((link) => link.url.split("#")[0]);
-  return [...new Set(candidates)].slice(0, 80);
+  return [...new Set(candidates)].slice(0, MAX_SERVICE_PAGES_PER_COMPETITOR);
 }
 
 const serviceAction = /разработк|проектирован|установк|монтаж|демонтаж|тест|испытан|обследован|организац|регулирован|согласован|сопровожден|обслуживан|ремонт|диагностик|настройк|внедрен|изготовлен|(?:^|\s)производство(?:\s|$)|поставк|доставк|аренд|прокат|обучен|консультац|аудит|оценк|расч[её]т|нанесен|разметк|строительств|реконструкц|утилизац|эвакуац|перевозк|сертификац|экспертиз/iu;
@@ -218,7 +218,7 @@ async function fetchServicePage(url: string): Promise<string> {
 }
 
 async function discoverDomainServices(domain: string, knownPages: string[] = []): Promise<ServiceDiscovery> {
-  let candidates = knownPages.filter((url) => sameSite(url, domain)).slice(0, 80);
+  let candidates = knownPages.filter((url) => sameSite(url, domain)).slice(0, MAX_SERVICE_PAGES_PER_COMPETITOR);
   if (candidates.length === 0) {
     const homepage = `https://${domain}/`;
     try { candidates = servicePageCandidates(await fetchServicePage(homepage), homepage, domain); } catch { /* Try conventional service paths below. */ }
@@ -228,7 +228,7 @@ async function discoverDomainServices(domain: string, knownPages: string[] = [])
   const sources: string[] = [];
   const pending = [...new Set(candidates.map((url) => url.split("#")[0]))];
   const visited = new Set<string>();
-  const maxServicePages = 80;
+  const maxServicePages = MAX_SERVICE_PAGES_PER_COMPETITOR;
   while (pending.length > 0 && visited.size < maxServicePages) {
     const batch = pending.splice(0, Math.min(6, maxServicePages - visited.size)).filter((url) => !visited.has(url));
     batch.forEach((url) => visited.add(url));
@@ -761,7 +761,8 @@ function findAny(text: string, words: string[]): boolean { const lower = text.to
 function listFound(text: string, mapping: Record<string, string>): string { const lower = text.toLowerCase(); return Object.entries(mapping).filter(([key]) => lower.includes(key)).map(([, value]) => value).join(", "); }
 
 const MIN_COMPETITOR_RELEVANCE = 6;
-const MAX_COMPETITORS = 80;
+const MAX_COMPETITORS = 40;
+const MAX_SERVICE_PAGES_PER_COMPETITOR = 18;
 
 function relevanceScore(primaryText: string, bodyText: string, description: string, searchEvidence = ""): number {
   const ignored = new Set([
@@ -1453,7 +1454,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   if (competitors.length === 0) throw new Error("Поисковая выдача получена, но прямые конкуренты не подтверждены по содержанию их сайтов.");
 
   const knownBases = new Set(candidates.map(([domain]) => registrableDomain(domain)));
-  for (let round = 0; round < 2 && competitors.length < MAX_COMPETITORS && industryRegistryCandidates.length === 0 && Date.now() - startedAt < 80000; round += 1) {
+  for (let round = 0; round < 1 && competitors.length < 20 && industryRegistryCandidates.length === 0 && Date.now() - startedAt < 60000; round += 1) {
     const expansionBase = basePhrase;
     if (!expansionBase) break;
     const expansionQueries = [
@@ -1498,7 +1499,7 @@ export async function analyzeProject(input: AnalysisInput): Promise<AnalysisResu
   }
 
   const serviceCandidates: Record<string, string[]> = {};
-  await mapWithConcurrency(competitors, 8, async (competitor) => {
+  await mapWithConcurrency(competitors, 10, async (competitor) => {
     const registryDomain = registrableDomain(competitor.domain);
     const servicesTask = discoverDomainServices(competitor.domain, competitor.servicePages);
     if (verifiedIndustryDomains.has(registryDomain)) {

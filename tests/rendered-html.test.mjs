@@ -30,7 +30,8 @@ test("uses open web search and keeps the final Excel columns", async () => {
   assert.match(analysis, /responseFormat:\s*"FORMAT_XML"/);
   assert.match(analysis, /groupsOnPage:\s*50/);
   assert.match(analysis, /MIN_COMPETITOR_RELEVANCE = 6/);
-  assert.match(analysis, /MAX_COMPETITORS = 80/);
+  assert.match(analysis, /MAX_COMPETITORS = 40/);
+  assert.match(analysis, /MAX_SERVICE_PAGES_PER_COMPETITOR = 18/);
   assert.match(analysis, /function searchEvidenceRelevance/);
   assert.match(analysis, /evidenceRelevance >= MIN_COMPETITOR_RELEVANCE/);
   assert.match(analysis, /relevantCandidates\.slice\(0, MAX_COMPETITORS\)/);
